@@ -21,6 +21,44 @@ TUNE = 25
 logging.addLevelName(25, "TUNE")
 
 
+def export_best_hyperparameters(
+    log_dir: Path,
+    best_params: dict,
+    best_value: float | None,
+    trial_number: int | None = None,
+    source: str = "optuna",
+):
+    """Persist best hyperparameters for a run directory."""
+    export_file = log_dir / "best_hyperparameters.json"
+    export_payload = {
+        "source": source,
+        "objective": "minimize_validation_loss",
+        "metric": "val/loss",
+        "best_value": best_value,
+        "trial_number": trial_number,
+        "best_params": best_params,
+    }
+    with export_file.open("w") as f:
+        json.dump(export_payload, f, cls=JsonResultLoggingEncoder, indent=4)
+    logging.info(f"Exported best hyperparameters to {export_file}.")
+
+
+def export_best_hyperparameters_from_study(log_dir: Path, study: optuna.study.Study, source: str = "optuna_study"):
+    """Export the best trial from an Optuna study if available."""
+    try:
+        best_trial = study.best_trial
+    except Exception as e:
+        logging.warning(f"Could not determine best Optuna trial for export: {e}")
+        return
+    export_best_hyperparameters(
+        log_dir=log_dir,
+        best_params=best_trial.params,
+        best_value=best_trial.value,
+        trial_number=best_trial.number,
+        source=source,
+    )
+
+
 @gin.configurable("tune_hyperparameters_deprecated")
 def choose_and_bind_hyperparameters_scikit_optimize(
     do_tune: bool,
@@ -287,6 +325,7 @@ def choose_and_bind_hyperparameters_optuna(
             configuration = study.best_params
             # We have loaded a checkpoint, use the best hyperparameters.
             logging.info("Training with the best hyperparameters from loaded checkpoint:")
+            export_best_hyperparameters_from_study(log_dir, study, source="optuna_checkpoint")
             bind_gin_params(configuration)
             return
         else:
@@ -364,6 +403,7 @@ def choose_and_bind_hyperparameters_optuna(
     else:
         logging.info("No more hyperparameter tuning iterations left, skipping tuning.")
         logging.info("Training with these hyperparameters:")
+        export_best_hyperparameters_from_study(log_dir, study, source="optuna_resumed")
         bind_gin_params(study.best_params)
         return
     logging.disable(level=NOTSET)
@@ -372,6 +412,7 @@ def choose_and_bind_hyperparameters_optuna(
         log_full_line("FINISHED TUNING", level=TUNE, char="=", num_newlines=4)
 
     logging.info("Training with these hyperparameters:")
+    export_best_hyperparameters_from_study(log_dir, study, source="optuna_completed")
     bind_gin_params(study.best_params)
 
     if plot:

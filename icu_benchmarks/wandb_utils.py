@@ -4,6 +4,8 @@ from pathlib import Path
 
 import wandb
 
+WANDB_RUN_ID_FILE = "wandb_run_id.txt"
+
 
 def wandb_running() -> bool:
     """Check if wandb is running."""
@@ -39,6 +41,30 @@ def apply_wandb_sweep(args: Namespace) -> Namespace:
         args.hyperparams.append(f"{key}=" + (("'" + value + "'") if isinstance(value, str) else str(value)))
     logging.info(f"hyperparams after loading sweep config: {args.hyperparams}")
     return args
+
+
+def maybe_resume_wandb_run(args: Namespace, run_dir: Path, resume_requested: bool = False) -> None:
+    """Persists and optionally resumes a wandb run id for a YAIB run directory."""
+    if not wandb_running():
+        return
+
+    run_id_path = run_dir / WANDB_RUN_ID_FILE
+    saved_run_id = run_id_path.read_text(encoding="utf-8").strip() if run_id_path.is_file() else None
+    current_run_id = wandb.run.id
+
+    if resume_requested and saved_run_id and saved_run_id != current_run_id:
+        logging.info(f"Switching wandb run from {current_run_id} to saved run id {saved_run_id}.")
+        try:
+            wandb.finish()
+            wandb.init(allow_val_change=True, dir=args.log_dir, id=saved_run_id, resume="allow")
+            current_run_id = wandb.run.id
+        except Exception as exception:
+            logging.warning(f"Could not resume wandb run id {saved_run_id}: {exception}")
+            return
+
+    if saved_run_id is None or (not resume_requested and saved_run_id != current_run_id):
+        run_id_path.write_text(str(current_run_id), encoding="utf-8")
+        logging.info(f"Persisted wandb run id {current_run_id} to {run_id_path}.")
 
 
 def wandb_log(log_dict):

@@ -2,6 +2,7 @@ import importlib
 import sys
 import warnings
 from math import sqrt
+from typing import Optional
 
 import gin
 import torch
@@ -48,6 +49,7 @@ def build_parser() -> ArgumentParser:
     parser.add_argument("--tune", default=False, action=BOA, help="Find best hyperparameters.")
     parser.add_argument("--hp-checkpoint", type=Path, help="Use previous hyperparameter checkpoint.")
     parser.add_argument("--eval", default=False, action=BOA, help="Only evaluate model, skip training.")
+    parser.add_argument("--resume", default=False, action=BOA, help="Resume the latest run in the same log directory.")
     parser.add_argument("--complete-train", default=False, action=BOA, help="Use all data to train model, skip testing.")
     parser.add_argument("-ft", "--fine-tune", default=None, type=int, help="Finetune model with amount of train data.")
     parser.add_argument("-sn", "--source-name", type=Path, help="Name of the source dataset.")
@@ -83,6 +85,28 @@ def create_run_dir(log_dir: Path, randomly_searched_params: str = None) -> Path:
     if randomly_searched_params:
         (log_dir_run / randomly_searched_params).touch()
     return log_dir_run
+
+
+def get_latest_run_dir(log_dir: Path) -> Optional[Path]:
+    """Returns the latest timestamped run directory if available."""
+    if not log_dir.exists():
+        return None
+    run_dirs = [run_dir for run_dir in log_dir.iterdir() if run_dir.is_dir()]
+    if not run_dirs:
+        return None
+    # YAIB run directories are timestamp-like names, so lexicographic sort works.
+    return max(run_dirs, key=lambda run_dir: run_dir.name)
+
+
+def get_or_create_run_dir(log_dir: Path, resume: bool = False, randomly_searched_params: str = None) -> Path:
+    """Returns an existing run directory when resuming, otherwise creates one."""
+    if resume:
+        latest_run_dir = get_latest_run_dir(log_dir)
+        if latest_run_dir is not None:
+            logging.info(f"Resuming existing run directory: {latest_run_dir}")
+            return latest_run_dir
+        logging.info(f"No previous run found in {log_dir}. Creating a new run directory.")
+    return create_run_dir(log_dir, randomly_searched_params=randomly_searched_params)
 
 
 def import_preprocessor(preprocessor_path: str):

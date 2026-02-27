@@ -5,13 +5,18 @@ import logging
 import sys
 from pathlib import Path
 import torch.cuda
-from icu_benchmarks.wandb_utils import update_wandb_config, apply_wandb_sweep, set_wandb_experiment_name
+from icu_benchmarks.wandb_utils import (
+    update_wandb_config,
+    apply_wandb_sweep,
+    set_wandb_experiment_name,
+    maybe_resume_wandb_run,
+)
 from icu_benchmarks.tuning.hyperparameters import choose_and_bind_hyperparameters_optuna
 from scripts.plotting.utils import plot_aggregated_results
 from icu_benchmarks.cross_validation import execute_repeated_cv
 from icu_benchmarks.run_utils import (
     build_parser,
-    create_run_dir,
+    get_or_create_run_dir,
     aggregate_results,
     log_full_line,
     load_pretrained_imputation_model,
@@ -117,7 +122,7 @@ def main(my_args=tuple(sys.argv[1:])):
         if args.fine_tune:
             log_dir /= f"fine_tune_{args.fine_tune}"
             name_datasets(args.name, args.name, args.name)
-        run_dir = create_run_dir(log_dir)
+        run_dir = get_or_create_run_dir(log_dir, resume=args.resume)
         source_dir = args.source_dir
         logging.info(f"Will load weights from {source_dir} and bind train gin-config. Note: this might override your config.")
         gin.parse_config_file(source_dir / "train_config.gin")
@@ -126,7 +131,7 @@ def main(my_args=tuple(sys.argv[1:])):
         gin.parse_config_file(args.source_dir / "train_config.gin")
         log_dir /= f"samples_{args.fine_tune}"
         name_datasets(args.name, args.name, args.name)
-        run_dir = create_run_dir(log_dir)
+        run_dir = get_or_create_run_dir(log_dir, resume=args.resume)
     else:
         # Normal train and evaluate
         name_datasets(args.name, args.name, args.name)
@@ -141,7 +146,7 @@ def main(my_args=tuple(sys.argv[1:])):
         )
         gin.parse_config_files_and_bindings(gin_config_files, args.hyperparams, finalize_config=False)
         log_full_line(f"Data directory: {data_dir.resolve()}", level=logging.INFO)
-        run_dir = create_run_dir(log_dir)
+        run_dir = get_or_create_run_dir(log_dir, resume=args.resume)
         choose_and_bind_hyperparameters_optuna(
             do_tune=args.tune,
             data_dir=data_dir,
@@ -155,6 +160,9 @@ def main(my_args=tuple(sys.argv[1:])):
             verbose=verbose,
             wandb=args.wandb_sweep,
         )
+    if args.wandb_sweep:
+        maybe_resume_wandb_run(args, run_dir, resume_requested=args.resume)
+        set_wandb_experiment_name(args, "run")
 
     log_full_line(f"Logging to {run_dir.resolve()}", level=logging.INFO)
     if evaluate:
@@ -184,6 +192,7 @@ def main(my_args=tuple(sys.argv[1:])):
         cpu=args.cpu,
         wandb=args.wandb_sweep,
         complete_train=args.complete_train,
+        resume=args.resume,
     )
 
     log_full_line("FINISHED TRAINING", level=logging.INFO, char="=", num_newlines=3)
