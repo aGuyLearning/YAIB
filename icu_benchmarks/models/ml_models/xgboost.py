@@ -42,8 +42,8 @@ class XGBClassifier(MLWrapper):
         """Fit the model to the training data (default SKlearn syntax)"""
         callbacks = [EarlyStopping(self.hparams.patience)]
 
-        if wandb.run is not None:
-            callbacks.append(wandb_xgb())
+        #if wandb.run is not None:
+        #    callbacks.append(wandb_xgb())
         logging.debug(f"train_data: {train_data.shape}, train_labels: {train_labels.shape}")
         logging.debug(train_labels)
         self.model.fit(train_data, train_labels, eval_set=[(val_data, val_labels)], verbose=False)
