@@ -24,7 +24,6 @@ parameters:
       - ../data/kidney_function/miiv
       - ../data/kidney_function/hirid
       - ../data/kidney_function/eicu
-      - ../data/kidney_function/aumc
   model:
     values:
       - ElasticNet

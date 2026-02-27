@@ -21,23 +21,18 @@ parameters:
       - ../data/mortality24/miiv
       - ../data/mortality24/hirid
       - ../data/mortality24/eicu
-      - ../data/mortality24/aumc
       - ../data/aki/miiv
       - ../data/aki/hirid
       - ../data/aki/eicu
-      - ../data/aki/aumc
       - ../data/sepsis/miiv
       - ../data/sepsis/hirid
       - ../data/sepsis/eicu
-      - ../data/sepsis/aumc
       - ../data/los/miiv
       - ../data/los/hirid
       - ../data/los/eicu
-      - ../data/los/aumc
       - ../data/kidney_function/miiv
       - ../data/kidney_function/hirid
       - ../data/kidney_function/eicu
-      - ../data/kidney_function/aumc
   model:
     values:
       - GRU
