@@ -26,8 +26,8 @@ def _has_parseable_json(file_path: Path) -> bool:
         return False
 
 
-def _is_completed_fold(fold_dir: Path, complete_train: bool) -> bool:
-    if complete_train:
+def _is_completed_fold(fold_dir: Path, complete_train: bool, mode: RunMode = RunMode.classification) -> bool:
+    if complete_train or mode == RunMode.pretrain:
         model_artifacts = ("model.ckpt", "last.ckpt", "model.joblib")
         has_model_artifact = any((fold_dir / artifact).is_file() for artifact in model_artifacts)
         return has_model_artifact and _has_parseable_json(fold_dir / "durations.json")
@@ -108,7 +108,7 @@ def execute_repeated_cv(
         for fold_index in range(cv_folds_to_train):
             repetition_fold_dir = log_dir / f"repetition_{repetition}" / f"fold_{fold_index}"
             repetition_fold_dir.mkdir(parents=True, exist_ok=True)
-            if resume and _is_completed_fold(repetition_fold_dir, complete_train=complete_train):
+            if resume and _is_completed_fold(repetition_fold_dir, complete_train=complete_train, mode=mode):
                 logging.info(f"Skipping completed fold: repetition_{repetition}/fold_{fold_index}")
                 continue
 
@@ -157,7 +157,7 @@ def execute_repeated_cv(
                 json.dump(durations, f, cls=JsonResultLoggingEncoder)
             if wandb:
                 wandb_log({"Iteration": repetition * cv_folds_to_train + fold_index})
-            if repetition * cv_folds_to_train + fold_index > 1:
+            if repetition * cv_folds_to_train + fold_index > 1 and mode != RunMode.pretrain:
                 try:
                     aggregate_results(log_dir)
                 except Exception as e:
@@ -165,3 +165,41 @@ def execute_repeated_cv(
         log_full_line(f"FINISHED CV REPETITION {repetition}", level=logging.INFO, char="=", num_newlines=3)
 
     return agg_loss / (cv_repetitions_to_train * cv_folds_to_train)
+
+
+@gin.configurable
+def execute_pretrain_loop(
+    data_dir: Path,
+    log_dir: Path,
+    seed: int,
+    reproducible: bool = True,
+    debug: bool = False,
+    generate_cache: bool = False,
+    load_cache: bool = False,
+    cpu: bool = False,
+    verbose: bool = False,
+    wandb: bool = False,
+    complete_train: bool = False,
+    resume: bool = False,
+) -> float:
+    """Executes TS2Vec-style self-supervised pretraining loop in YAIB."""
+    return execute_repeated_cv(
+        data_dir=data_dir,
+        log_dir=log_dir,
+        seed=seed,
+        eval_only=False,
+        train_size=None,
+        load_weights=False,
+        source_dir=Path(""),
+        reproducible=reproducible,
+        debug=debug,
+        generate_cache=generate_cache,
+        load_cache=load_cache,
+        mode=RunMode.pretrain,
+        pretrained_imputation_model=None,
+        cpu=cpu,
+        verbose=verbose,
+        wandb=wandb,
+        complete_train=complete_train,
+        resume=resume,
+    )

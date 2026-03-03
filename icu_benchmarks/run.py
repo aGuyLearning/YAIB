@@ -13,7 +13,7 @@ from icu_benchmarks.wandb_utils import (
 )
 from icu_benchmarks.tuning.hyperparameters import choose_and_bind_hyperparameters_optuna
 from scripts.plotting.utils import plot_aggregated_results
-from icu_benchmarks.cross_validation import execute_repeated_cv
+from icu_benchmarks.cross_validation import execute_pretrain_loop, execute_repeated_cv
 from icu_benchmarks.run_utils import (
     build_parser,
     get_or_create_run_dir,
@@ -174,35 +174,52 @@ def main(my_args=tuple(sys.argv[1:])):
     log_full_line(mode_string, level=logging.INFO, char="=", num_newlines=3)
 
     start_time = datetime.now()
-    execute_repeated_cv(
-        data_dir,
-        run_dir,
-        args.seed,
-        eval_only=evaluate,
-        train_size=train_size,
-        load_weights=load_weights,
-        source_dir=source_dir,
-        reproducible=reproducible,
-        debug=args.debug,
-        verbose=args.verbose,
-        load_cache=args.load_cache,
-        generate_cache=args.generate_cache,
-        mode=mode,
-        pretrained_imputation_model=pretrained_imputation_model,
-        cpu=args.cpu,
-        wandb=args.wandb_sweep,
-        complete_train=args.complete_train,
-        resume=args.resume,
-    )
+    if mode == RunMode.pretrain:
+        execute_pretrain_loop(
+            data_dir=data_dir,
+            log_dir=run_dir,
+            seed=args.seed,
+            reproducible=reproducible,
+            debug=args.debug,
+            verbose=args.verbose,
+            load_cache=args.load_cache,
+            generate_cache=args.generate_cache,
+            cpu=args.cpu,
+            wandb=args.wandb_sweep,
+            complete_train=args.complete_train,
+            resume=args.resume,
+        )
+    else:
+        execute_repeated_cv(
+            data_dir,
+            run_dir,
+            args.seed,
+            eval_only=evaluate,
+            train_size=train_size,
+            load_weights=load_weights,
+            source_dir=source_dir,
+            reproducible=reproducible,
+            debug=args.debug,
+            verbose=args.verbose,
+            load_cache=args.load_cache,
+            generate_cache=args.generate_cache,
+            mode=mode,
+            pretrained_imputation_model=pretrained_imputation_model,
+            cpu=args.cpu,
+            wandb=args.wandb_sweep,
+            complete_train=args.complete_train,
+            resume=args.resume,
+        )
 
     log_full_line("FINISHED TRAINING", level=logging.INFO, char="=", num_newlines=3)
     execution_time = datetime.now() - start_time
     log_full_line(f"DURATION: {execution_time}", level=logging.INFO, char="")
-    try:
-        aggregate_results(run_dir, execution_time)
-    except Exception as e:
-        logging.error(f"Failed to aggregate results: {e}")
-        logging.debug("Error details:", exc_info=True)
+    if mode != RunMode.pretrain:
+        try:
+            aggregate_results(run_dir, execution_time)
+        except Exception as e:
+            logging.error(f"Failed to aggregate results: {e}")
+            logging.debug("Error details:", exc_info=True)
     if args.plot:
         plot_aggregated_results(run_dir, "aggregated_test_metrics.json")
 

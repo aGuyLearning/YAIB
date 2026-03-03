@@ -1,0 +1,24 @@
+# COMMON IMPORTS
+include "configs/tasks/common/Imports.gin"
+
+# DATASET CONFIGURATION
+include "configs/tasks/common/PredictionTaskVariables.gin"
+
+# CROSS-VALIDATION
+include "configs/tasks/common/CrossValidation.gin"
+
+# MODE SETTINGS
+Run.mode = "Pretrain"
+train_common.weight = ""
+train_common.ram_cache = True
+
+# SELECTING PREPROCESSOR
+preprocess.preprocessor = @base_classification_preprocessor
+preprocess.vars = %vars
+preprocess.use_static = False
+preprocess.required_var_types = ["GROUP", "SEQUENCE"]
+preprocess.required_segments = ["DYNAMIC", "OUTCOME"]
+base_classification_preprocessor.strict_outcome_alignment = False
+
+# SELECTING DATASET
+include "configs/tasks/common/Dataloader.gin"

@@ -1,0 +1,30 @@
+# TS2Vec self-supervised pretraining on demo corpora.
+command:
+  - ${env}
+  - ${program}
+  - -d
+  - ../demo_data/
+  - -t
+  - Pretrain
+  - --log-dir
+  - ../yaib_logs_pretrain
+  - --wandb-sweep
+  - -gc
+  - -lc
+method: grid
+name: yaib_ts2vec_pretrain
+parameters:
+  # Supports both single-source and pooled corpora via data_dir.
+  # Use one of these values at a time, or add your own merged corpus paths.
+  data_dir:
+    values:
+      - ../demo_data/corpus_mimic_demo
+      - ../demo_data/corpus_eicu_demo
+      # - ../demo_data/corpus_mimic_eicu_demo
+  model:
+    values:
+      - TS2Vec
+  seed:
+    values:
+      - 1111
+program: icu-benchmarks

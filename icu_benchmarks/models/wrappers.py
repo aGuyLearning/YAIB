@@ -66,11 +66,17 @@ class BaseModule(LightningModule):
 
     def set_weight(self, weight, dataset):
         """Set the weight for the loss function."""
-
+        if weight in ("", None, "None", "none"):
+            weight = None
         if isinstance(weight, list):
             weight = FloatTensor(weight).to(self.device)
         elif weight == "balanced":
-            weight = FloatTensor(dataset.get_balance()).to(self.device)
+            computed_balance = dataset.get_balance()
+            if len(computed_balance) < 2:
+                logging.warning("Only one class present in split. Disabling class-weight balancing for this run.")
+                weight = None
+            else:
+                weight = FloatTensor(computed_balance).to(self.device)
         self.loss_weights = weight
 
     def training_step(self, batch, batch_idx):
@@ -337,7 +343,8 @@ class DLPredictionWrapper(DLWrapper):
 
         if prediction.shape[-1] > 1 and self.run_mode == RunMode.classification:
             # Classification task
-            loss = self.loss(prediction, target.long(), weight=self.loss_weights.to(self.device)) + aux_loss
+            class_weight = self.loss_weights.to(self.device) if isinstance(self.loss_weights, Tensor) else None
+            loss = self.loss(prediction, target.long(), weight=class_weight) + aux_loss
             # Returns torch.long because negative log likelihood loss
         elif self.run_mode == RunMode.regression:
             # Regression task

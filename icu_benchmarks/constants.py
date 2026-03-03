@@ -5,3 +5,4 @@ class RunMode(str, Enum):
     classification = "Classification"
     imputation = "Imputation"
     regression = "Regression"
+    pretrain = "Pretrain"

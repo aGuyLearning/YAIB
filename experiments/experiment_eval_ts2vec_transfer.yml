@@ -1,0 +1,30 @@
+# TS2Vec downstream transfer using a pretrained encoder and probe head.
+command:
+  - ${env}
+  - ${program}
+  - -d
+  - ../demo_data/
+  - -t
+  - BinaryClassification
+  - --log-dir
+  - ../yaib_logs_transfer
+  - --wandb-sweep
+  - -gc
+  - -lc
+  - -hp
+  - model/hyperparameter.pretrained_encoder_path=path/to/pretrain/last.ckpt
+method: grid
+name: yaib_ts2vec_transfer_probe
+parameters:
+  data_dir:
+    values:
+      - ../demo_data/mortality24/eicu_demo
+      - ../demo_data/sepsis/eicu_demo
+      - ../demo_data/aki/eicu_demo
+  model:
+    values:
+      - TS2VecProbe
+  seed:
+    values:
+      - 1111
+program: icu-benchmarks

@@ -1,0 +1,22 @@
+# Settings for TS2Vec model.
+
+# Imports to register models/wrappers
+import icu_benchmarks.models.wrappers
+import icu_benchmarks.models.dl_models.ts2vec
+
+# Core train params
+train_common.model = @TS2Vec
+train_common.epochs = 20
+train_common.batch_size = 64
+train_common.patience = 5
+train_common.min_delta = 1e-4
+train_common.weight = ""
+train_common.train_only = True
+
+# Fixed params for smoke testing / baseline pretraining
+TS2Vec.hidden_dim = 128
+TS2Vec.projection_dim = 64
+TS2Vec.encoder_layers = 3
+TS2Vec.dropout = 0.1
+TS2Vec.aug_noise_std = 0.05
+TS2Vec.temperature = 0.1

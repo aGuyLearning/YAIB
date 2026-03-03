@@ -10,19 +10,35 @@ import pandas as pd
 import polars as pl
 import torch
 from numpy import nan as np_nan
-from recipys.recipe import Recipe
-from recipys.selector import all_numeric_predictors, all_of, all_outcomes, has_type
-from recipys.step import (
-    Accumulator,
-    Selector,
-    StepHistorical,
-    StepImputeFastForwardFill,
-    StepImputeFastZeroFill,
-    StepImputeFill,
-    StepImputeModel,
-    StepScale,
-    StepSklearn,
-)
+try:
+    from recipys.recipe import Recipe
+    from recipys.selector import all_numeric_predictors, all_of, all_outcomes, has_type
+    from recipys.step import (
+        Accumulator,
+        Selector,
+        StepHistorical,
+        StepImputeFastForwardFill,
+        StepImputeFastZeroFill,
+        StepImputeFill,
+        StepImputeModel,
+        StepScale,
+        StepSklearn,
+    )
+except ModuleNotFoundError:
+    # Some environments install this package as `recipies`.
+    from recipies.recipe import Recipe
+    from recipies.selector import all_numeric_predictors, all_of, all_outcomes, has_type
+    from recipies.step import (
+        Accumulator,
+        Selector,
+        StepHistorical,
+        StepImputeFastForwardFill,
+        StepImputeFastZeroFill,
+        StepImputeFill,
+        StepImputeModel,
+        StepScale,
+        StepSklearn,
+    )
 from sklearn.impute import MissingIndicator, SimpleImputer
 from sklearn.preprocessing import FunctionTransformer, LabelEncoder, MinMaxScaler
 
@@ -74,6 +90,7 @@ class PolarsClassificationPreprocessor(Preprocessor):
         generate_features: bool = False,
         scaling: bool = True,
         use_static_features: bool = True,
+        strict_outcome_alignment: bool = True,
         save_cache: Optional[Union[str, Path]] = None,
         load_cache: Optional[Union[str, Path]] = None,
         vars_to_exclude: Optional[list[str]] = None,
@@ -98,6 +115,7 @@ class PolarsClassificationPreprocessor(Preprocessor):
             vars_to_exclude=vars_to_exclude,
         )
         self.imputation_model = None
+        self.strict_outcome_alignment = strict_outcome_alignment
 
     def apply(
         self,
@@ -160,14 +178,15 @@ class PolarsClassificationPreprocessor(Preprocessor):
         if not isinstance(vars["SEQUENCE"], str):
             raise TypeError(f'Expected key "SEQUENCE" to be of type str, got {type(vars["SEQUENCE"])} instead')
 
-        for split in [DataSplit.train, DataSplit.val, DataSplit.test]:
-            if vars["SEQUENCE"] in data[split][DataSegment.outcome] and len(data[split][DataSegment.features]) != len(
-                data[split][DataSegment.outcome]
-            ):
-                raise Exception(
-                    f"Data and outcome length mismatch in {split} split: "
-                    f"features: {len(data[split][DataSegment.features])}, outcome: {len(data[split][DataSegment.outcome])}"
-                )
+        if self.strict_outcome_alignment:
+            for split in [DataSplit.train, DataSplit.val, DataSplit.test]:
+                if vars["SEQUENCE"] in data[split][DataSegment.outcome] and len(data[split][DataSegment.features]) != len(
+                    data[split][DataSegment.outcome]
+                ):
+                    raise Exception(
+                        f"Data and outcome length mismatch in {split} split: "
+                        f"features: {len(data[split][DataSegment.features])}, outcome: {len(data[split][DataSegment.outcome])}"
+                    )
         data[DataSplit.train][DataSegment.features] = data[DataSplit.train][DataSegment.features].unique()
         data[DataSplit.val][DataSegment.features] = data[DataSplit.val][DataSegment.features].unique()
         data[DataSplit.test][DataSegment.features] = data[DataSplit.test][DataSegment.features].unique()

@@ -179,6 +179,33 @@ class PredictionPolarsDataset(CommonPolarsDataset):
             return from_numpy(data), from_numpy(labels), row_indicators
 
 
+@gin.configurable("PretrainPolarsDataset")
+class PretrainPolarsDataset(CommonPolarsDataset):
+    """Dataset for self-supervised sequence pretraining.
+
+    Returns only feature windows (no labels) grouped by stay_id.
+    """
+
+    def __init__(self, *args, ram_cache: bool = True, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.ram_cache(ram_cache)
+
+    def __getitem__(self, idx: int) -> Tensor:
+        if self._cached_dataset is not None:
+            return self._cached_dataset[idx]
+
+        pad_value = 0.0
+        stay_id = self.grouping_df[self.vars["GROUP"]].unique()[idx]
+        window = (
+            self.features_df.filter(pl.col(self.vars["GROUP"]) == stay_id).select(pl.exclude(self.vars["GROUP"])).to_numpy()
+        )
+
+        length_diff = self.maxlen - window.shape[0]
+        if length_diff > 0:
+            window = np.concatenate([window, np.ones((length_diff, window.shape[1])) * pad_value], axis=0)
+        return from_numpy(window.astype(np.float32))
+
+
 @gin.configurable("CommonPandasDataset")
 class CommonPandasDataset(Dataset):
     """Common dataset: subclass of Torch Dataset that represents the data to learn on.

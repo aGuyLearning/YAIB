@@ -16,7 +16,12 @@ from torch.utils.data import DataLoader
 
 from icu_benchmarks.constants import RunMode
 from icu_benchmarks.data.constants import DataSplit as DataSplit
-from icu_benchmarks.data.loader import ImputationPandasDataset, PredictionPandasDataset, PredictionPolarsDataset
+from icu_benchmarks.data.loader import (
+    ImputationPandasDataset,
+    PredictionPandasDataset,
+    PredictionPolarsDataset,
+    PretrainPolarsDataset,
+)
 from icu_benchmarks.models import DLModel, MLModelClassifier, MLModelRegression
 from icu_benchmarks.models.utils import JSONMetricsLogger, save_config_file
 
@@ -95,6 +100,7 @@ def train_common(
         RunMode.imputation: ImputationPandasDataset,
         RunMode.classification: PredictionPolarsDataset if polars else PredictionPandasDataset,
         RunMode.regression: PredictionPolarsDataset if polars else PredictionPandasDataset,
+        RunMode.pretrain: PretrainPolarsDataset,
     }
     dataset_class = dataset_classes[mode]
 
@@ -119,7 +125,6 @@ def train_common(
         num_workers=num_workers,
         drop_last=True,
         persistent_workers=persistent_workers,
-        pin_memory=True,
     )
     val_loader = DataLoader(
         val_dataset,
@@ -128,10 +133,13 @@ def train_common(
         num_workers=num_workers,
         drop_last=True,
         persistent_workers=persistent_workers,
-        pin_memory=True,
     )
 
-    data_shape = next(iter(train_loader))[0].shape
+    first_batch = next(iter(train_loader))
+    if mode == RunMode.pretrain:
+        data_shape = first_batch.shape
+    else:
+        data_shape = first_batch[0].shape
 
     if load_weights:
         model: DLModel | MLModelClassifier | MLModelRegression = load_model(model, source_dir, pl_model=pl_model)
@@ -189,7 +197,9 @@ def train_common(
             model.fit(train_dataset, val_dataset)
             model.save_model(log_dir, "last")
             logging.info("Training complete.")
-    if train_only:
+    if train_only or mode == RunMode.pretrain:
+        if model.requires_backprop and not (log_dir / "last.ckpt").is_file():
+            trainer.save_checkpoint(str(log_dir / "last.ckpt"))
         logging.info("Finished training full model.")
         save_config_file(log_dir)
         return 0

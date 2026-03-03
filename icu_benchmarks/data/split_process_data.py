@@ -80,9 +80,15 @@ def preprocess_data(
     if selected_modalities is None:
         selected_modalities = ["all"]
     if required_var_types is None:
-        required_var_types = ["GROUP", "SEQUENCE", "LABEL"]
+        required_var_types = (
+            ["GROUP", "SEQUENCE"] if runmode == RunMode.pretrain else ["GROUP", "SEQUENCE", "LABEL"]
+        )
     if required_segments is None:
-        required_segments = [DataSegment.static, DataSegment.dynamic, DataSegment.outcome]
+        required_segments = (
+            [DataSegment.dynamic, DataSegment.outcome]
+            if runmode == RunMode.pretrain
+            else [DataSegment.static, DataSegment.dynamic, DataSegment.outcome]
+        )
 
     check_required_keys(vars, required_var_types)
     check_required_keys(file_names, required_segments)
@@ -91,16 +97,17 @@ def preprocess_data(
         file_names.pop(DataSegment.static)
         vars.pop(DataSegment.static)
 
-    if isinstance(vars[VarType.label], list) and len(vars[VarType.label]) > 1:
-        if label is not None:
-            vars[VarType.label] = [label]
-        else:
-            logging.debug(f"Multiple labels found and no value provided. Using first label: {vars[VarType.label]}")
-            vars[VarType.label] = vars[VarType.label][0]
-        logging.info(f"Using label: {vars[VarType.label]}")
+    if VarType.label in vars:
+        if isinstance(vars[VarType.label], list) and len(vars[VarType.label]) > 1:
+            if label is not None:
+                vars[VarType.label] = [label]
+            else:
+                logging.debug(f"Multiple labels found and no value provided. Using first label: {vars[VarType.label]}")
+                vars[VarType.label] = vars[VarType.label][0]
+            logging.info(f"Using label: {vars[VarType.label]}")
 
-    if not vars[VarType.label]:
-        raise ValueError("No label selected after filtering.")
+        if not vars[VarType.label]:
+            raise ValueError("No label selected after filtering.")
 
     dumped_file_names = json.dumps(file_names, sort_keys=True)
     dumped_vars = json.dumps(vars, sort_keys=True)
