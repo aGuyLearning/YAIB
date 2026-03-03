@@ -8,7 +8,7 @@ from pathlib import Path
 from skopt import gp_minimize
 import tempfile
 import optuna
-from optuna.integration.wandb import WeightsAndBiasesCallback
+from optuna_integration.wandb import WeightsAndBiasesCallback
 from icu_benchmarks.models.utils import JsonResultLoggingEncoder, log_table_row, Align
 from icu_benchmarks.cross_validation import execute_repeated_cv
 from icu_benchmarks.run_utils import log_full_line

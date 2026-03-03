@@ -1,5 +1,6 @@
 import importlib
 import sys
+import time
 import warnings
 from math import sqrt
 
@@ -77,9 +78,15 @@ def create_run_dir(log_dir: Path, randomly_searched_params: str = None) -> Path:
         Path to the created run log directory.
     """
     log_dir_run = log_dir / str(datetime.now().strftime("%Y-%m-%dT%H-%M-%S"))
-    while log_dir_run.exists():
-        log_dir_run = log_dir / str(datetime.now().strftime("%Y-%m-%dT%H-%M-%S.%f"))
-    log_dir_run.mkdir(parents=True)
+    for _ in range(10):
+        try:
+            log_dir_run.mkdir(parents=True)
+            break
+        except FileExistsError:
+            time.sleep(0.1)
+            log_dir_run = log_dir / str(datetime.now().strftime("%Y-%m-%dT%H-%M-%S.%f"))
+    else:
+        raise FileExistsError(f"Could not create unique run directory after 10 attempts: {log_dir_run}")
     if randomly_searched_params:
         (log_dir_run / randomly_searched_params).touch()
     return log_dir_run
