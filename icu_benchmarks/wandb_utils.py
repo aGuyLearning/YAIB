@@ -85,8 +85,8 @@ def fetch_optuna_db_from_sibling_runs(
 ) -> Optional[Path]:
     """Download the Optuna DB from a crashed/failed sibling run of the current sweep.
 
-    Queries the W&B API for other runs in the same sweep that have uploaded
-    the tuning DB file and downloads the most recent one.
+    Prefers versioned W&B artifacts (logged by the updated tune_step_callback)
+    and falls back to flat files uploaded via wandb.save.
 
     Returns the local path to the downloaded DB, or None if nothing was found.
     """
@@ -112,12 +112,40 @@ def fetch_optuna_db_from_sibling_runs(
                 return False
         return True
 
+    best_n_trials = 0
+    best_local_path: Optional[Path] = None
+
     for run in sweep.runs:
         if run.id == current_run_id:
             continue
         if run.state not in ("crashed", "failed"):
             continue
         if not configs_match(dict(run.config)):
+            continue
+
+        # Try artifact first (has trial count in metadata for picking the best)
+        artifact_name = f"{wandb.run.entity}/{wandb.run.project}/optuna-db-{run.id}:latest"
+        try:
+            artifact = api.artifact(artifact_name)
+            n_trials = artifact.metadata.get("n_trials", 0)
+            if n_trials > best_n_trials:
+                artifact_dir = artifact.download(root=str(download_dir))
+                candidate = Path(artifact_dir) / db_filename
+                if candidate.exists():
+                    best_n_trials = n_trials
+                    best_local_path = download_dir / db_filename
+                    if candidate != best_local_path:
+                        candidate.rename(best_local_path)
+                    logging.info(
+                        f"Downloaded Optuna artifact from sibling run {run.id} "
+                        f"({n_trials} trials) to {best_local_path}"
+                    )
+            continue
+        except Exception:
+            pass
+
+        # Fall back to flat file
+        if best_local_path is not None:
             continue
         try:
             run_files = {f.name for f in run.files()}
@@ -128,11 +156,12 @@ def fetch_optuna_db_from_sibling_runs(
         local_path = download_dir / db_filename
         try:
             run.file(db_filename).download(root=str(download_dir), replace=True)
-            logging.info(f"Downloaded Optuna DB from sibling run {run.id} to {local_path}")
-            return local_path
+            logging.info(f"Downloaded Optuna DB (flat file) from sibling run {run.id} to {local_path}")
+            best_local_path = local_path
         except Exception as exc:
             logging.warning(f"Failed to download DB from run {run.id}: {exc}")
             continue
 
-    logging.info("No sibling runs with an Optuna DB found for this sweep combination.")
-    return None
+    if best_local_path is None:
+        logging.info("No sibling runs with an Optuna DB found for this sweep combination.")
+    return best_local_path

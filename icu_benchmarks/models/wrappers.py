@@ -417,8 +417,8 @@ class MLWrapper(BaseModule, ABC):
 
         self.set_metrics(train_label)
 
-        if "class_weight" in self.model.get_params().keys():  # Set class weights
-            self.model.set_params(class_weight=self.weight)
+        if "class_weight" in self.model.get_params().keys() and self.loss_weights is not None:
+            self.model.set_params(class_weight="balanced")
 
         val_loss = self.fit_model(train_rep, train_label, val_rep, val_label)
 

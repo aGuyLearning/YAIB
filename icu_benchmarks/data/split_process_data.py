@@ -48,6 +48,7 @@ def preprocess_data(
     label: Optional[str] = None,
     required_var_types: Optional[list[str]] = None,
     required_segments: Optional[list[str]] = None,
+    cache_dir: Optional[Path] = None,
 ) -> dict[str, dict[str, pl.DataFrame]]:
     """
     Perform loading, splitting, imputing and normalising of task data.
@@ -121,11 +122,12 @@ def preprocess_data(
     else:
         vars_to_exclude = None
 
-    cache_dir = data_dir / "cache"
+    effective_cache_dir = cache_dir if cache_dir is not None else data_dir / "cache"
+    preproc_dir = effective_cache_dir.parent / "preproc" if cache_dir is not None else data_dir / "preproc"
     cache_filename = f"s_{seed}_r_{repetition_index}_f_{fold_index}_t_{train_size}_d_{debug}"
     preprocessor_instance: Preprocessor = preprocessor(
         use_static_features=use_static,
-        save_cache=data_dir / "preproc" / (cache_filename + "_recipe") if generate_cache else None,
+        save_cache=preproc_dir / (cache_filename + "_recipe") if generate_cache else None,
         vars_to_exclude=vars_to_exclude,
     )
     if isinstance(preprocessor_instance, PandasClassificationPreprocessor):
@@ -133,7 +135,7 @@ def preprocess_data(
 
     hash_config = hashlib.md5(f"{preprocessor_instance.to_cache_string()}{dumped_file_names}{dumped_vars}".encode("utf-8"))
     cache_filename += f"_{hash_config.hexdigest()}"
-    cache_file = cache_dir / cache_filename
+    cache_file = effective_cache_dir / cache_filename
 
     if load_cache:
         if cache_file.exists():
@@ -205,7 +207,7 @@ def preprocess_data(
 
     # Generate cache
     if generate_cache:
-        caching(cache_dir, cache_file, sanitized_data, load_cache)
+        caching(effective_cache_dir, cache_file, sanitized_data, load_cache)
     else:
         logging.info("Cache will not be saved.")
 

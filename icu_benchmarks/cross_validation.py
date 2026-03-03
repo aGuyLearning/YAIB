@@ -7,6 +7,7 @@ from typing import Optional
 import gin
 from pytorch_lightning import seed_everything
 
+from icu_benchmarks.cache_utils import clean_run_cache
 from icu_benchmarks.constants import RunMode
 from icu_benchmarks.data.split_process_data import preprocess_data
 from icu_benchmarks.models.train import train_common
@@ -104,6 +105,7 @@ def execute_repeated_cv(
                 pretrained_imputation_model=pretrained_imputation_model,
                 runmode=mode,
                 complete_train=complete_train,
+                cache_dir=log_dir / "cache",
             )
             preprocess_time = datetime.now() - start_time
             start_time = datetime.now()
@@ -140,6 +142,7 @@ def execute_repeated_cv(
                     logging.error(f"Failed to aggregate results: {e}")
         log_full_line(f"FINISHED CV REPETITION {repetition}", level=logging.INFO, char="=", num_newlines=3)
 
+    clean_run_cache(log_dir)
     return agg_loss / (cv_repetitions_to_train * cv_folds_to_train)
 
 

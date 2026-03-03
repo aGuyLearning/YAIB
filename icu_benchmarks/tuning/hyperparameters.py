@@ -311,10 +311,21 @@ def choose_and_bind_hyperparameters_optuna(
         log_table_row(table_cells, TUNE, align=Align.RIGHT, header=header, highlight=highlight)
         wandb_log({"HP-optimization-iteration": len(study.trials)})
         if wandb_running():
+            import sqlite3
             import wandb as _wandb
             db_path = str(log_dir / checkpoint_file)
-            _wandb.save(db_path, base_path=str(log_dir), policy="live")
-            logging.info(f"Uploaded Optuna DB to W&B: {db_path}")
+            conn = sqlite3.connect(db_path)
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.close()
+            artifact = _wandb.Artifact(
+                f"optuna-db-{_wandb.run.id}",
+                type="optuna-checkpoint",
+                metadata={"n_trials": len(study.trials)},
+            )
+            artifact.add_file(db_path)
+            _wandb.log_artifact(artifact)
+            _wandb.save(db_path, base_path=str(log_dir), policy="now")
+            logging.info(f"Uploaded Optuna DB to W&B (trial {len(study.trials)}): {db_path}")
 
     if do_tune:
         log_full_line("STARTING TUNING", level=TUNE, char="=")
