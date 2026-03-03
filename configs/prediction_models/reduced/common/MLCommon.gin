@@ -1,0 +1,22 @@
+# Common settings for ML models — reduced tuning budget variant.
+# Standalone (does not include the original MLCommon.gin) to avoid gin duplicate-binding errors.
+
+# Imports to register the models
+import gin.torch.external_configurables
+import icu_benchmarks.models.wrappers
+import icu_benchmarks.models.ml_models.sklearn
+import icu_benchmarks.models.ml_models.lgbm
+import icu_benchmarks.models.ml_models.xgboost
+import icu_benchmarks.models.ml_models.imblearn
+import icu_benchmarks.models.ml_models.catboost
+import icu_benchmarks.models.utils
+
+# Patience for early stopping
+MLWrapper.patience = 10
+
+# Generate features from dynamic data
+base_classification_preprocessor.generate_features = True
+base_regression_preprocessor.generate_features = True
+
+# Reduced hyperparameter tuning settings
+include "configs/prediction_models/reduced/common/MLTuning.gin"

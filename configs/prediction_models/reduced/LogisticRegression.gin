@@ -1,0 +1,18 @@
+# Reduced HP search settings for Logistic Regression.
+# Changes vs original:
+#   penalty:   ["l1","l2","elasticnet"] → ["l1","l2"]  — removes one search dimension and l1_ratio
+#   l1_ratio:  removed entirely (only relevant for elasticnet)
+#   C:         lower bound 1e-3 → 1e-2, scale "log-uniform" → "log" for correct Optuna log search
+
+include "configs/prediction_models/reduced/common/MLCommon.gin"
+
+# Train params
+train_common.model = @LogisticRegression
+MLWrapper.patience = 10
+
+model/hyperparameter.class_to_tune = @LogisticRegression
+model/hyperparameter.solver = "saga"
+model/hyperparameter.n_jobs = 8
+model/hyperparameter.max_iter = 100000
+model/hyperparameter.C = (1e-2, 1e1, "log")
+model/hyperparameter.penalty = ["l1", "l2"]

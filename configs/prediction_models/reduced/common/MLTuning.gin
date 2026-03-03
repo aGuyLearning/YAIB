@@ -1,0 +1,6 @@
+# Reduced hyperparameter tuner settings for classical Machine Learning.
+# Budget: 15 trials × 3 folds (ML tuning is already fast; reduction avoids over-searching).
+tune_hyperparameters.scopes = ["model"]
+tune_hyperparameters.n_initial_points = 3
+tune_hyperparameters.n_calls = 15
+tune_hyperparameters.folds_to_tune_on = 3

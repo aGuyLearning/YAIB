@@ -1,0 +1,19 @@
+# Reduced HP search settings for LightGBM Regressor (used for LOS and KF regression tasks).
+# Same structural changes as LGBMClassifier:
+#   colsample_bytree: (0.33, 1.0) — restored to original; consistent with classifier
+#   subsample:        lower bound 0.33 → 0.5  — finished runs all ≥ 0.60
+
+include "configs/prediction_models/reduced/common/MLCommon.gin"
+
+# Train params
+train_common.model = @LGBMRegressor
+
+model/hyperparameter.class_to_tune = @LGBMRegressor
+model/hyperparameter.colsample_bytree = (0.33, 1.0)
+model/hyperparameter.max_depth = (3, 7)
+model/hyperparameter.min_child_samples = 1000
+model/hyperparameter.n_estimators = 100000
+model/hyperparameter.num_leaves = (8, 128, "log")
+model/hyperparameter.subsample = (0.5, 1.0)
+model/hyperparameter.subsample_freq = 1
+model/hyperparameter.eval_metric = "logloss"

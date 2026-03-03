@@ -1,0 +1,20 @@
+# Reduced HP search settings for LightGBM Classifier.
+# Changes vs original:
+#   colsample_bytree: (0.33, 1.0) — restored to original; hirid/mortality24 optimum was 0.33
+#   subsample:        lower bound 0.33 → 0.5  — finished runs all ≥ 0.60
+# Architecture params (max_depth, num_leaves) kept wide — paper artifacts show full range is used
+# depending on task complexity (num_leaves: 8 for hirid/mortality24 up to 128 for aki tasks).
+
+include "configs/prediction_models/reduced/common/MLCommon.gin"
+
+# Train params
+train_common.model = @LGBMClassifier
+
+model/hyperparameter.class_to_tune = @LGBMClassifier
+model/hyperparameter.colsample_bytree = (0.33, 1.0)
+model/hyperparameter.max_depth = (3, 7)
+model/hyperparameter.min_child_samples = 1000
+model/hyperparameter.n_estimators = 100000
+model/hyperparameter.num_leaves = (8, 128, "log")
+model/hyperparameter.subsample = (0.5, 1.0)
+model/hyperparameter.subsample_freq = 1

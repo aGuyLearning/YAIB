@@ -1,0 +1,31 @@
+# Reduced HP search settings for Transformer model.
+# Changes vs original:
+#   ff_hidden_mult: (2,4,6,8) → fixed 4        — standard value; 6/8 rarely win
+#   l1_reg:         (0.0,1.0) → fixed 0.0      — removes non-standard regularisation dimension
+#   hidden:         (32,512,"log") → [64,128,256] — categorical ensures divisibility by heads=4
+#   heads:          (1,8,"log") → fixed 4       — removes dimension; 4 heads suits hidden ∈ {64,128,256}
+#   depth:          (1,3) → (1,2)               — shallow transformers generally better for ICU
+#   dropout_att:    (0.0,1.0) → (0.0,0.3)      — values >0.5 cripple attention
+#   dropout:        kept fixed at 0             — original author found no improvement from tuning
+#   lr:             (1e-6,1e-4) → (1e-5,5e-4)  — restores upper end to cover standard Adam lr of 3e-4
+
+include "configs/prediction_models/reduced/common/DLCommon.gin"
+
+# Train params
+train_common.model = @Transformer
+
+# Optimizer params
+optimizer/hyperparameter.class_to_tune = @Adam
+optimizer/hyperparameter.weight_decay = 1e-6
+optimizer/hyperparameter.lr = (1e-5, 5e-4, "log")
+
+# Encoder params
+model/hyperparameter.class_to_tune = @Transformer
+model/hyperparameter.num_classes = %NUM_CLASSES
+model/hyperparameter.ff_hidden_mult = 4
+model/hyperparameter.l1_reg = 0.0
+model/hyperparameter.hidden = [64, 128, 256]
+model/hyperparameter.heads = 4
+model/hyperparameter.depth = (1, 2)
+model/hyperparameter.dropout = 0
+model/hyperparameter.dropout_att = (0.0, 0.3)

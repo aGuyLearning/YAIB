@@ -63,7 +63,6 @@ def train_common(
     num_workers: int = min(cpu_core_count, torch.cuda.device_count() * 8 * int(torch.cuda.is_available()), 32),
     polars: bool = True,
     persistent_workers: bool = False,
-    resume: bool = False,
 ):
     """Common wrapper to train all benchmarked models.
 
@@ -185,12 +184,7 @@ def train_common(
     if not eval_only:
         if model.requires_backprop:
             logging.info("Training DL model.")
-            ckpt_path = None
-            last_checkpoint = log_dir / "last.ckpt"
-            if resume and last_checkpoint.is_file():
-                ckpt_path = str(last_checkpoint)
-                logging.info(f"Resuming DL training from checkpoint: {last_checkpoint}")
-            trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader, ckpt_path=ckpt_path)
+            trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
             logging.info("Training complete.")
         else:
             logging.info("Training ML model.")

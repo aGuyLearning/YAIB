@@ -14,7 +14,7 @@ from icu_benchmarks.cross_validation import execute_repeated_cv
 from icu_benchmarks.run_utils import log_full_line
 from icu_benchmarks.tuning.gin_utils import get_gin_hyperparameters, bind_gin_params
 from icu_benchmarks.constants import RunMode
-from icu_benchmarks.wandb_utils import wandb_log
+from icu_benchmarks.wandb_utils import wandb_log, wandb_running
 from optuna.visualization import plot_param_importances, plot_optimization_history
 
 TUNE = 25
@@ -310,6 +310,11 @@ def choose_and_bind_hyperparameters_optuna(
         log_table_row(header, TUNE)
         log_table_row(table_cells, TUNE, align=Align.RIGHT, header=header, highlight=highlight)
         wandb_log({"HP-optimization-iteration": len(study.trials)})
+        if wandb_running():
+            import wandb as _wandb
+            db_path = str(log_dir / checkpoint_file)
+            _wandb.save(db_path, base_path=str(log_dir), policy="live")
+            logging.info(f"Uploaded Optuna DB to W&B: {db_path}")
 
     if do_tune:
         log_full_line("STARTING TUNING", level=TUNE, char="=")

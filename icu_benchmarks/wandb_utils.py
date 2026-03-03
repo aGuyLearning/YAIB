@@ -1,10 +1,9 @@
 from argparse import Namespace
 import logging
 from pathlib import Path
+from typing import Optional
 
 import wandb
-
-WANDB_RUN_ID_FILE = "wandb_run_id.txt"
 
 
 def wandb_running() -> bool:
@@ -43,30 +42,6 @@ def apply_wandb_sweep(args: Namespace) -> Namespace:
     return args
 
 
-def maybe_resume_wandb_run(args: Namespace, run_dir: Path, resume_requested: bool = False) -> None:
-    """Persists and optionally resumes a wandb run id for a YAIB run directory."""
-    if not wandb_running():
-        return
-
-    run_id_path = run_dir / WANDB_RUN_ID_FILE
-    saved_run_id = run_id_path.read_text(encoding="utf-8").strip() if run_id_path.is_file() else None
-    current_run_id = wandb.run.id
-
-    if resume_requested and saved_run_id and saved_run_id != current_run_id:
-        logging.info(f"Switching wandb run from {current_run_id} to saved run id {saved_run_id}.")
-        try:
-            wandb.finish()
-            wandb.init(allow_val_change=True, dir=args.log_dir, id=saved_run_id, resume="allow")
-            current_run_id = wandb.run.id
-        except Exception as exception:
-            logging.warning(f"Could not resume wandb run id {saved_run_id}: {exception}")
-            return
-
-    if saved_run_id is None or (not resume_requested and saved_run_id != current_run_id):
-        run_id_path.write_text(str(current_run_id), encoding="utf-8")
-        logging.info(f"Persisted wandb run id {current_run_id} to {run_id_path}.")
-
-
 def wandb_log(log_dict):
     """logs metrics to wandb
 
@@ -102,3 +77,62 @@ def set_wandb_experiment_name(args, mode):
     if wandb_running():
         wandb.config.update({"run-name": run_name})
         wandb.run.name = run_name
+
+
+def fetch_optuna_db_from_sibling_runs(
+    download_dir: Path,
+    db_filename: str = "hyperparameter_tuning_logs.db",
+) -> Optional[Path]:
+    """Download the Optuna DB from a crashed/failed sibling run of the current sweep.
+
+    Queries the W&B API for other runs in the same sweep that have uploaded
+    the tuning DB file and downloads the most recent one.
+
+    Returns the local path to the downloaded DB, or None if nothing was found.
+    """
+    if not wandb_running() or wandb.run.sweep_id is None:
+        return None
+
+    api = wandb.Api()
+    sweep_path = f"{wandb.run.entity}/{wandb.run.project}/{wandb.run.sweep_id}"
+    try:
+        sweep = api.sweep(sweep_path)
+    except Exception as exc:
+        logging.warning(f"Could not fetch sweep {sweep_path}: {exc}")
+        return None
+
+    current_run_id = wandb.run.id
+    current_config = dict(wandb.config)
+
+    def configs_match(run_config: dict) -> bool:
+        for key in current_config:
+            if key.startswith("_") or key == "run-name":
+                continue
+            if run_config.get(key) != current_config.get(key):
+                return False
+        return True
+
+    for run in sweep.runs:
+        if run.id == current_run_id:
+            continue
+        if run.state not in ("crashed", "failed"):
+            continue
+        if not configs_match(dict(run.config)):
+            continue
+        try:
+            run_files = {f.name for f in run.files()}
+        except Exception:
+            continue
+        if db_filename not in run_files:
+            continue
+        local_path = download_dir / db_filename
+        try:
+            run.file(db_filename).download(root=str(download_dir), replace=True)
+            logging.info(f"Downloaded Optuna DB from sibling run {run.id} to {local_path}")
+            return local_path
+        except Exception as exc:
+            logging.warning(f"Failed to download DB from run {run.id}: {exc}")
+            continue
+
+    logging.info("No sibling runs with an Optuna DB found for this sweep combination.")
+    return None

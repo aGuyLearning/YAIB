@@ -15,25 +15,6 @@ from icu_benchmarks.run_utils import aggregate_results, log_full_line
 from icu_benchmarks.wandb_utils import wandb_log
 
 
-def _has_parseable_json(file_path: Path) -> bool:
-    if not file_path.is_file():
-        return False
-    try:
-        with file_path.open("r") as file:
-            json.load(file)
-        return True
-    except (json.JSONDecodeError, OSError):
-        return False
-
-
-def _is_completed_fold(fold_dir: Path, complete_train: bool, mode: RunMode = RunMode.classification) -> bool:
-    if complete_train or mode == RunMode.pretrain:
-        model_artifacts = ("model.ckpt", "last.ckpt", "model.joblib")
-        has_model_artifact = any((fold_dir / artifact).is_file() for artifact in model_artifacts)
-        return has_model_artifact and _has_parseable_json(fold_dir / "durations.json")
-    return _has_parseable_json(fold_dir / "test_metrics.json")
-
-
 @gin.configurable
 def execute_repeated_cv(
     data_dir: Path,
@@ -58,7 +39,6 @@ def execute_repeated_cv(
     verbose: bool = False,
     wandb: bool = False,
     complete_train: bool = False,
-    resume: bool = False,
 ) -> float:
     """Preprocesses data and trains a model for each fold.
 
@@ -108,9 +88,6 @@ def execute_repeated_cv(
         for fold_index in range(cv_folds_to_train):
             repetition_fold_dir = log_dir / f"repetition_{repetition}" / f"fold_{fold_index}"
             repetition_fold_dir.mkdir(parents=True, exist_ok=True)
-            if resume and _is_completed_fold(repetition_fold_dir, complete_train=complete_train, mode=mode):
-                logging.info(f"Skipping completed fold: repetition_{repetition}/fold_{fold_index}")
-                continue
 
             start_time = datetime.now()
             data = preprocess_data(
@@ -143,7 +120,6 @@ def execute_repeated_cv(
                 verbose=verbose,
                 use_wandb=wandb,
                 train_only=complete_train,
-                resume=resume,
             )
             train_time = datetime.now() - start_time
 
@@ -180,7 +156,6 @@ def execute_pretrain_loop(
     verbose: bool = False,
     wandb: bool = False,
     complete_train: bool = False,
-    resume: bool = False,
 ) -> float:
     """Executes TS2Vec-style self-supervised pretraining loop in YAIB."""
     return execute_repeated_cv(
@@ -201,5 +176,4 @@ def execute_pretrain_loop(
         verbose=verbose,
         wandb=wandb,
         complete_train=complete_train,
-        resume=resume,
     )

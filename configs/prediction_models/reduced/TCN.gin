@@ -1,0 +1,24 @@
+# Reduced HP search settings for Temporal Convolutional Network (TCN) model.
+# Changes vs original:
+#   num_channels: upper bound 256 → 128  — diminishing returns beyond 128 for ICU sequences
+#   kernel_size:  (2, 128) → (2, 16)     — kernels >16 span most of a typical ICU horizon
+#   dropout:      (0.0, 0.4) → (0.0, 0.5) — restored to tunable; observed optima 0.19–0.4
+#   lr:           (1e-6, 3e-4) → (1e-5, 1e-3) — removes impractically slow lr end
+
+include "configs/prediction_models/reduced/common/DLCommon.gin"
+
+# Train params
+train_common.model = @TemporalConvNet
+
+# Optimizer params
+optimizer/hyperparameter.class_to_tune = @Adam
+optimizer/hyperparameter.weight_decay = 1e-6
+optimizer/hyperparameter.lr = (1e-5, 1e-3, "log")
+
+# Encoder params
+model/hyperparameter.class_to_tune = @TemporalConvNet
+model/hyperparameter.num_classes = %NUM_CLASSES
+model/hyperparameter.max_seq_length = %HORIZON
+model/hyperparameter.num_channels = (32, 128, "log")
+model/hyperparameter.kernel_size = (2, 16, "log")
+model/hyperparameter.dropout = (0.0, 0.5)

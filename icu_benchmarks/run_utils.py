@@ -2,7 +2,6 @@ import importlib
 import sys
 import warnings
 from math import sqrt
-from typing import Optional
 
 import gin
 import torch
@@ -49,7 +48,6 @@ def build_parser() -> ArgumentParser:
     parser.add_argument("--tune", default=False, action=BOA, help="Find best hyperparameters.")
     parser.add_argument("--hp-checkpoint", type=Path, help="Use previous hyperparameter checkpoint.")
     parser.add_argument("--eval", default=False, action=BOA, help="Only evaluate model, skip training.")
-    parser.add_argument("--resume", default=False, action=BOA, help="Resume the latest run in the same log directory.")
     parser.add_argument("--complete-train", default=False, action=BOA, help="Use all data to train model, skip testing.")
     parser.add_argument("-ft", "--fine-tune", default=None, type=int, help="Finetune model with amount of train data.")
     parser.add_argument("-sn", "--source-name", type=Path, help="Name of the source dataset.")
@@ -85,28 +83,6 @@ def create_run_dir(log_dir: Path, randomly_searched_params: str = None) -> Path:
     if randomly_searched_params:
         (log_dir_run / randomly_searched_params).touch()
     return log_dir_run
-
-
-def get_latest_run_dir(log_dir: Path) -> Optional[Path]:
-    """Returns the latest timestamped run directory if available."""
-    if not log_dir.exists():
-        return None
-    run_dirs = [run_dir for run_dir in log_dir.iterdir() if run_dir.is_dir()]
-    if not run_dirs:
-        return None
-    # YAIB run directories are timestamp-like names, so lexicographic sort works.
-    return max(run_dirs, key=lambda run_dir: run_dir.name)
-
-
-def get_or_create_run_dir(log_dir: Path, resume: bool = False, randomly_searched_params: str = None) -> Path:
-    """Returns an existing run directory when resuming, otherwise creates one."""
-    if resume:
-        latest_run_dir = get_latest_run_dir(log_dir)
-        if latest_run_dir is not None:
-            logging.info(f"Resuming existing run directory: {latest_run_dir}")
-            return latest_run_dir
-        logging.info(f"No previous run found in {log_dir}. Creating a new run directory.")
-    return create_run_dir(log_dir, randomly_searched_params=randomly_searched_params)
 
 
 def import_preprocessor(preprocessor_path: str):
@@ -288,20 +264,24 @@ def get_config_files(config_dir: Path):
 
     Returns:
         tasks: List of task names
-        models: List of model names
+        models: List of model names (may include subdirectory paths, e.g. "reduced/GRU")
     """
     try:
-        tasks = list((config_dir / "tasks").glob("*"))
-        models = list((config_dir / "prediction_models").glob("*"))
-        tasks = [task.stem for task in tasks if task.is_file()]
-        models = [model.stem for model in models if model.is_file()]
+        task_dir = config_dir / "tasks"
+        model_dir = config_dir / "prediction_models"
+        tasks = [t.stem for t in task_dir.glob("*") if t.is_file()]
+        # Search recursively so subdirectory configs (e.g. reduced/GRU.gin) are included.
+        # Skip any file whose path contains a "common" component (shared include files).
+        models = [
+            str(m.relative_to(model_dir).with_suffix(""))
+            for m in model_dir.rglob("*.gin")
+            if "common" not in m.parts
+        ]
     except Exception as e:
         logging.error(f"Error retrieving config files: {e}")
         return [], []
     if "common" in tasks:
         tasks.remove("common")
-    if "common" in models:
-        models.remove("common")
     logging.info(f"Found tasks: {tasks}")
     logging.info(f"Found models: {models}")
     return tasks, models
