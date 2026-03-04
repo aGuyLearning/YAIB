@@ -1,5 +1,6 @@
 import json
 import logging
+import signal
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -79,93 +80,110 @@ def execute_repeated_cv(
         cv_repetitions_to_train = cv_repetitions
     if not cv_folds_to_train:
         cv_folds_to_train = cv_folds
-    agg_loss = 0
-    seed_everything(seed, reproducible)
-    if complete_train:
-        logging.info("Will train full model without cross validation.")
-        cv_repetitions_to_train = 1
-        cv_folds_to_train = 1
 
-    else:
-        logging.info(f"Starting nested CV with {cv_repetitions_to_train} repetitions of {cv_folds_to_train} folds.")
-    # Train model for each repetition (a manner of splitting the folds)
-    for repetition in range(cv_repetitions_to_train):
-        # Train model for each fold configuration (i.e, one fold is test fold and the rest are train/val folds)
-        for fold_index in range(cv_folds_to_train):
-            repetition_fold_dir = log_dir / f"repetition_{repetition}" / f"fold_{fold_index}"
-            repetition_fold_dir.mkdir(parents=True, exist_ok=True)
+    effective_cache_dir = cache_dir or log_dir
+    prev_sigterm = signal.getsignal(signal.SIGTERM)
 
-            start_time = datetime.now()
-            data = preprocess_data(
-                data_dir,
-                seed=seed,
-                debug=debug,
-                load_cache=load_cache,
-                generate_cache=generate_cache,
-                cv_repetitions=cv_repetitions,
-                repetition_index=repetition,
-                train_size=train_size,
-                cv_folds=cv_folds,
-                fold_index=fold_index,
-                pretrained_imputation_model=pretrained_imputation_model,
-                runmode=mode,
-                complete_train=complete_train,
-                cache_dir=(cache_dir or log_dir) / "cache",
-            )
-            preprocess_time = datetime.now() - start_time
-            start_time = datetime.now()
-            agg_loss += train_common(
-                data,
-                log_dir=repetition_fold_dir,
-                eval_only=eval_only,
-                load_weights=load_weights,
-                source_dir=source_dir,
-                reproducible=reproducible,
-                test_on=test_on,
-                mode=mode,
-                cpu=cpu,
-                verbose=verbose,
-                use_wandb=wandb,
-                train_only=complete_train,
-            )
-            train_time = datetime.now() - start_time
+    def _cleanup_on_sigterm(signum, frame):
+        logging.warning(f"Received signal {signum}, cleaning up cache before exit.")
+        clean_run_cache(effective_cache_dir)
+        if callable(prev_sigterm):
+            prev_sigterm(signum, frame)
+        else:
+            raise SystemExit(128 + signum)
 
-            log_full_line(
-                f"FINISHED FOLD {fold_index}| PREPROCESSING DURATION {preprocess_time}| PROCEDURE DURATION {train_time}",
-                level=logging.INFO,
-            )
-            durations = {"preprocessing_duration": preprocess_time, "train_duration": train_time}
+    signal.signal(signal.SIGTERM, _cleanup_on_sigterm)
 
-            with open(repetition_fold_dir / "durations.json", "w") as f:
-                json.dump(durations, f, cls=JsonResultLoggingEncoder)
-            if wandb:
-                wandb_log({"Iteration": repetition * cv_folds_to_train + fold_index})
-            if repetition * cv_folds_to_train + fold_index > 1 and mode != RunMode.pretrain:
-                try:
-                    aggregate_results(log_dir)
-                except Exception as e:
-                    logging.error(f"Failed to aggregate results: {e}")
+    try:
+        agg_loss = 0
+        seed_everything(seed, reproducible)
+        if complete_train:
+            logging.info("Will train full model without cross validation.")
+            cv_repetitions_to_train = 1
+            cv_folds_to_train = 1
 
-            if trial is not None:
-                import optuna
+        else:
+            logging.info(f"Starting nested CV with {cv_repetitions_to_train} repetitions of {cv_folds_to_train} folds.")
+        # Train model for each repetition (a manner of splitting the folds)
+        for repetition in range(cv_repetitions_to_train):
+            # Train model for each fold configuration (i.e, one fold is test fold and the rest are train/val folds)
+            for fold_index in range(cv_folds_to_train):
+                repetition_fold_dir = log_dir / f"repetition_{repetition}" / f"fold_{fold_index}"
+                repetition_fold_dir.mkdir(parents=True, exist_ok=True)
 
-                step = repetition * cv_folds_to_train + fold_index
-                running_avg = agg_loss / (step + 1)
-                trial.report(running_avg, step)
-                logging.info(f"Reported running avg loss {running_avg:.4f} to Optuna (step {step}).")
-                if trial.should_prune():
-                    logging.info(
-                        f"Trial pruned after fold {fold_index} (rep {repetition}): "
-                        f"running avg loss = {running_avg:.4f}"
-                    )
-                    clean_run_cache(cache_dir or log_dir)
-                    raise optuna.TrialPruned(
-                        f"Pruned at step {step} with running avg loss {running_avg:.4f}"
-                    )
-        log_full_line(f"FINISHED CV REPETITION {repetition}", level=logging.INFO, char="=", num_newlines=3)
+                start_time = datetime.now()
+                data = preprocess_data(
+                    data_dir,
+                    seed=seed,
+                    debug=debug,
+                    load_cache=load_cache,
+                    generate_cache=generate_cache,
+                    cv_repetitions=cv_repetitions,
+                    repetition_index=repetition,
+                    train_size=train_size,
+                    cv_folds=cv_folds,
+                    fold_index=fold_index,
+                    pretrained_imputation_model=pretrained_imputation_model,
+                    runmode=mode,
+                    complete_train=complete_train,
+                    cache_dir=effective_cache_dir / "cache",
+                )
+                preprocess_time = datetime.now() - start_time
+                start_time = datetime.now()
+                agg_loss += train_common(
+                    data,
+                    log_dir=repetition_fold_dir,
+                    eval_only=eval_only,
+                    load_weights=load_weights,
+                    source_dir=source_dir,
+                    reproducible=reproducible,
+                    test_on=test_on,
+                    mode=mode,
+                    cpu=cpu,
+                    verbose=verbose,
+                    use_wandb=wandb,
+                    train_only=complete_train,
+                )
+                train_time = datetime.now() - start_time
 
-    clean_run_cache(cache_dir or log_dir)
-    return agg_loss / (cv_repetitions_to_train * cv_folds_to_train)
+                log_full_line(
+                    f"FINISHED FOLD {fold_index}| PREPROCESSING DURATION {preprocess_time}| PROCEDURE DURATION {train_time}",
+                    level=logging.INFO,
+                )
+                durations = {"preprocessing_duration": preprocess_time, "train_duration": train_time}
+
+                with open(repetition_fold_dir / "durations.json", "w") as f:
+                    json.dump(durations, f, cls=JsonResultLoggingEncoder)
+                if wandb:
+                    wandb_log({"Iteration": repetition * cv_folds_to_train + fold_index})
+                if repetition * cv_folds_to_train + fold_index > 1 and mode != RunMode.pretrain:
+                    try:
+                        aggregate_results(log_dir)
+                    except Exception as e:
+                        logging.error(f"Failed to aggregate results: {e}")
+
+                if trial is not None:
+                    import optuna
+
+                    step = repetition * cv_folds_to_train + fold_index
+                    running_avg = agg_loss / (step + 1)
+                    trial.report(running_avg, step)
+                    logging.info(f"Reported running avg loss {running_avg:.4f} to Optuna (step {step}).")
+                    if trial.should_prune():
+                        logging.info(
+                            f"Trial pruned after fold {fold_index} (rep {repetition}): "
+                            f"running avg loss = {running_avg:.4f}"
+                        )
+                        clean_run_cache(effective_cache_dir)
+                        raise optuna.TrialPruned(
+                            f"Pruned at step {step} with running avg loss {running_avg:.4f}"
+                        )
+            log_full_line(f"FINISHED CV REPETITION {repetition}", level=logging.INFO, char="=", num_newlines=3)
+
+        clean_run_cache(effective_cache_dir)
+        return agg_loss / (cv_repetitions_to_train * cv_folds_to_train)
+    finally:
+        signal.signal(signal.SIGTERM, prev_sigterm)
 
 
 @gin.configurable
