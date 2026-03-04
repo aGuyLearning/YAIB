@@ -1,6 +1,6 @@
 # Reduced HP search settings for Gated Recurrent Unit (GRU) model.
 # Changes vs original:
-#   hidden_dim: (32, 512) → (64, 512)  — lower half rarely competitive; upper kept after data shows 512/379 optimal
+#   hidden_dim: (32, 512)               — restored lower bound; paper models go as low as 52
 #   layer_dim:  (1, 10)  → (1, 3)      — deep RNNs give vanishing gradients on ICU sequences
 #   lr:         (1e-6, 1e-4) → (1e-6, 5e-4) — restores slow-lr end (hirid optimum was 1e-6); upper raised slightly
 
@@ -17,5 +17,5 @@ optimizer/hyperparameter.lr = (1e-6, 5e-4, "log")
 # Encoder params
 model/hyperparameter.class_to_tune = @GRUNet
 model/hyperparameter.num_classes = %NUM_CLASSES
-model/hyperparameter.hidden_dim = (64, 512, "log")
+model/hyperparameter.hidden_dim = (32, 512, "log")
 model/hyperparameter.layer_dim = (1, 3)

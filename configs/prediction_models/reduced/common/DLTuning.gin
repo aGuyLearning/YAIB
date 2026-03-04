@@ -1,6 +1,7 @@
 # Reduced hyperparameter tuner settings for Deep Learning.
-# Budget: 15 trials × 3 folds × 30 epochs ≈ 5-6× faster than the standard 30 × 5 × 50.
+# Budget: 25 trials × 3 folds × 30 epochs.  MedianPruner (2 warmup folds) allows
+# pruning only after fold 2, so effective wall-clock cost is ~20 unpruned trials.
 tune_hyperparameters.scopes = ["model", "optimizer"]
 tune_hyperparameters.n_initial_points = 3
-tune_hyperparameters.n_calls = 15
+tune_hyperparameters.n_calls = 25
 tune_hyperparameters.folds_to_tune_on = 3

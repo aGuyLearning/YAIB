@@ -1,7 +1,7 @@
 # Reduced HP search settings for Long Short-Term Memory (LSTM) model.
 # Changes vs original:
 #   hidden_dim: unchanged at (32, 256) — aki/hirid optimum was 32, keeping lower bound
-#   layer_dim:  (1, 3) → (1, 2)       — single/double layer covers practical range for ICU
+#   layer_dim:  (1, 3)                 — kept at original; paper uses 3 layers for 5/9 models
 #   lr:         added "log" scale      — original lacked it; all observed optima at lower end
 
 include "configs/prediction_models/reduced/common/DLCommon.gin"
@@ -18,4 +18,4 @@ optimizer/hyperparameter.lr = (1e-5, 3e-4, "log")
 model/hyperparameter.class_to_tune = @LSTMNet
 model/hyperparameter.num_classes = %NUM_CLASSES
 model/hyperparameter.hidden_dim = (32, 256, "log")
-model/hyperparameter.layer_dim = (1, 2)
+model/hyperparameter.layer_dim = (1, 3)

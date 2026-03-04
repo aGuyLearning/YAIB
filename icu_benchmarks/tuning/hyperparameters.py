@@ -302,13 +302,21 @@ def choose_and_bind_hyperparameters_optuna(
                     hyperparams[name] = suggest_categorical_param(trial, name, value)
             else:
                 hyperparams[name] = trial.suggest_categorical(name, value)
-        return bind_params_and_train(hyperparams)
+        return bind_params_and_train(hyperparams, trial=trial)
 
     def tune_step_callback(study: optuna.study.Study, trial: optuna.trial.FrozenTrial):
-        table_cells = [str(len(study.trials)), *list(study.trials[-1].params.values()), study.trials[-1].value]
-        highlight = study.trials[-1] == study.best_trial  # highlight if best so far
-        log_table_row(header, TUNE)
-        log_table_row(table_cells, TUNE, align=Align.RIGHT, header=header, highlight=highlight)
+        pruned_count = len([t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED])
+        complete_count = len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])
+        logging.log(
+            TUNE,
+            f"Trial {trial.number} {trial.state.name} | "
+            f"Completed: {complete_count}, Pruned: {pruned_count}, Total: {len(study.trials)}",
+        )
+        if trial.state == optuna.trial.TrialState.COMPLETE:
+            table_cells = [str(len(study.trials)), *list(trial.params.values()), trial.value]
+            highlight = trial == study.best_trial
+            log_table_row(header, TUNE)
+            log_table_row(table_cells, TUNE, align=Align.RIGHT, header=header, highlight=highlight)
         wandb_log({"HP-optimization-iteration": len(study.trials)})
         if wandb_running():
             import sqlite3
@@ -351,7 +359,7 @@ def choose_and_bind_hyperparameters_optuna(
             n_initial_points = 1
             n_calls = 1
 
-    def bind_params_and_train(hyperparams):
+    def bind_params_and_train(hyperparams, trial=None):
         with tempfile.TemporaryDirectory(dir=log_dir) as temp_dir:
             bind_gin_params(hyperparams)
             if not do_tune:
@@ -369,6 +377,8 @@ def choose_and_bind_hyperparameters_optuna(
                 debug=debug,
                 verbose=verbose,
                 wandb=wandb,
+                cache_dir=log_dir,
+                trial=trial,
             )
             logging.info(f"Score: {score}")
             return score
@@ -377,7 +387,7 @@ def choose_and_bind_hyperparameters_optuna(
         sampler = sampler(seed=seed, n_startup_trials=n_initial_points, deterministic_objective=True)
     else:
         sampler = sampler(seed=seed)
-    pruner = optuna.pruners.HyperbandPruner()
+    pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=1)
     # Optuna study
     # Attempt checkpoint loading
     if checkpoint and checkpoint.exists():

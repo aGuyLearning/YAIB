@@ -2,7 +2,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import gin
 from pytorch_lightning import seed_everything
@@ -14,6 +14,9 @@ from icu_benchmarks.models.train import train_common
 from icu_benchmarks.models.utils import JsonResultLoggingEncoder
 from icu_benchmarks.run_utils import aggregate_results, log_full_line
 from icu_benchmarks.wandb_utils import wandb_log
+
+if TYPE_CHECKING:
+    import optuna
 
 
 @gin.configurable
@@ -40,6 +43,8 @@ def execute_repeated_cv(
     verbose: bool = False,
     wandb: bool = False,
     complete_train: bool = False,
+    cache_dir: Optional[Path] = None,
+    trial: Optional["optuna.trial.BaseTrial"] = None,
 ) -> float:
     """Preprocesses data and trains a model for each fold.
 
@@ -105,7 +110,7 @@ def execute_repeated_cv(
                 pretrained_imputation_model=pretrained_imputation_model,
                 runmode=mode,
                 complete_train=complete_train,
-                cache_dir=log_dir / "cache",
+                cache_dir=(cache_dir or log_dir) / "cache",
             )
             preprocess_time = datetime.now() - start_time
             start_time = datetime.now()
@@ -140,9 +145,26 @@ def execute_repeated_cv(
                     aggregate_results(log_dir)
                 except Exception as e:
                     logging.error(f"Failed to aggregate results: {e}")
+
+            if trial is not None:
+                import optuna
+
+                step = repetition * cv_folds_to_train + fold_index
+                running_avg = agg_loss / (step + 1)
+                trial.report(running_avg, step)
+                logging.info(f"Reported running avg loss {running_avg:.4f} to Optuna (step {step}).")
+                if trial.should_prune():
+                    logging.info(
+                        f"Trial pruned after fold {fold_index} (rep {repetition}): "
+                        f"running avg loss = {running_avg:.4f}"
+                    )
+                    clean_run_cache(cache_dir or log_dir)
+                    raise optuna.TrialPruned(
+                        f"Pruned at step {step} with running avg loss {running_avg:.4f}"
+                    )
         log_full_line(f"FINISHED CV REPETITION {repetition}", level=logging.INFO, char="=", num_newlines=3)
 
-    clean_run_cache(log_dir)
+    clean_run_cache(cache_dir or log_dir)
     return agg_loss / (cv_repetitions_to_train * cv_folds_to_train)
 
 

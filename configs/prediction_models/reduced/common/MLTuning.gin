@@ -1,6 +1,7 @@
 # Reduced hyperparameter tuner settings for classical Machine Learning.
-# Budget: 15 trials × 3 folds (ML tuning is already fast; reduction avoids over-searching).
+# Budget: 20 trials × 3 folds.  MedianPruner (2 warmup folds) allows pruning
+# only after fold 2, so effective wall-clock cost is ~15 unpruned trials.
 tune_hyperparameters.scopes = ["model"]
 tune_hyperparameters.n_initial_points = 3
-tune_hyperparameters.n_calls = 15
+tune_hyperparameters.n_calls = 20
 tune_hyperparameters.folds_to_tune_on = 3
