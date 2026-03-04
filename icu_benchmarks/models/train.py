@@ -106,9 +106,8 @@ def train_common(
     logging.info(f"Using dataset class: {dataset_class.__name__}.")
     logging.info(f"Logging to directory: {log_dir}.")
     save_config_file(log_dir)  # We save the operative config before and also after training
-    effective_ram_cache = ram_cache and getattr(model, "requires_backprop", True)
-    train_dataset = dataset_class(data, split=DataSplit.train, ram_cache=effective_ram_cache, name=dataset_names["train"])
-    val_dataset = dataset_class(data, split=DataSplit.val, ram_cache=effective_ram_cache, name=dataset_names["val"])
+    train_dataset = dataset_class(data, split=DataSplit.train, ram_cache=ram_cache, name=dataset_names["train"])
+    val_dataset = dataset_class(data, split=DataSplit.val, ram_cache=ram_cache, name=dataset_names["val"])
     train_dataset, val_dataset = assure_minimum_length(train_dataset), assure_minimum_length(val_dataset)
     batch_size = min(batch_size, len(train_dataset), len(val_dataset))
 
@@ -198,7 +197,7 @@ def train_common(
         logging.info("Finished training full model.")
         save_config_file(log_dir)
         return 0
-    test_dataset = dataset_class(data, split=test_on, name=dataset_names["test"], ram_cache=effective_ram_cache)
+    test_dataset = dataset_class(data, split=test_on, name=dataset_names["test"], ram_cache=ram_cache)
     test_dataset = assure_minimum_length(test_dataset)
     logging.info(f"Testing on {test_dataset.name}  with {len(test_dataset)} samples.")
     test_loader = (
