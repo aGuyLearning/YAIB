@@ -122,7 +122,7 @@ def main(my_args=tuple(sys.argv[1:])):
         if args.fine_tune:
             log_dir /= f"fine_tune_{args.fine_tune}"
             name_datasets(args.name, args.name, args.name)
-        run_dir = create_run_dir(log_dir)
+        run_dir = create_run_dir(log_dir, suffix=task)
         source_dir = args.source_dir
         logging.info(f"Will load weights from {source_dir} and bind train gin-config. Note: this might override your config.")
         gin.parse_config_file(source_dir / "train_config.gin")
@@ -131,7 +131,7 @@ def main(my_args=tuple(sys.argv[1:])):
         gin.parse_config_file(args.source_dir / "train_config.gin")
         log_dir /= f"samples_{args.fine_tune}"
         name_datasets(args.name, args.name, args.name)
-        run_dir = create_run_dir(log_dir)
+        run_dir = create_run_dir(log_dir, suffix=task)
     else:
         # Normal train and evaluate
         name_datasets(args.name, args.name, args.name)
@@ -146,7 +146,7 @@ def main(my_args=tuple(sys.argv[1:])):
         )
         gin.parse_config_files_and_bindings(gin_config_files, args.hyperparams, finalize_config=False)
         log_full_line(f"Data directory: {data_dir.resolve()}", level=logging.INFO)
-        run_dir = create_run_dir(log_dir)
+        run_dir = create_run_dir(log_dir, suffix=task)
         if hp_checkpoint is None and args.wandb_sweep:
             hp_checkpoint = fetch_optuna_db_from_sibling_runs(download_dir=run_dir)
         choose_and_bind_hyperparameters_optuna(

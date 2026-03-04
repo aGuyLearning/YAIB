@@ -1,7 +1,5 @@
 # Reduced HP search settings for Logistic Regression.
 # Changes vs original:
-#   penalty:   ["l1","l2","elasticnet"] → ["l1","l2"]  — removes one search dimension and l1_ratio
-#   l1_ratio:  removed entirely (only relevant for elasticnet)
 #   C:         (1e-3, 1e1, "log")       — paper sepsis models use C≈0.002; 1e-3 gives cushion
 
 include "configs/prediction_models/reduced/common/MLCommon.gin"
@@ -13,6 +11,8 @@ MLWrapper.patience = 10
 model/hyperparameter.class_to_tune = @LogisticRegression
 model/hyperparameter.solver = "saga"
 model/hyperparameter.n_jobs = 8
-model/hyperparameter.max_iter = 100000
+# Paper models use max_iter=100; implicit early stopping acts as regularisation
+model/hyperparameter.max_iter = 100
 model/hyperparameter.C = (1e-3, 1e1, "log")
-model/hyperparameter.penalty = ["l1", "l2"]
+model/hyperparameter.penalty = ["l1", "l2", "elasticnet"]
+model/hyperparameter.l1_ratio = (0.0, 1.0)

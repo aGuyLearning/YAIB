@@ -1,6 +1,5 @@
 import importlib
 import sys
-import time
 import warnings
 from math import sqrt
 
@@ -64,7 +63,7 @@ def build_parser() -> ArgumentParser:
     return parser
 
 
-def create_run_dir(log_dir: Path, randomly_searched_params: str = None) -> Path:
+def create_run_dir(log_dir: Path, suffix: str = None, randomly_searched_params: str = None) -> Path:
     """Creates a log directory with the current time as name.
 
     Also creates a file in the log directory, if any parameters were randomly searched.
@@ -72,19 +71,21 @@ def create_run_dir(log_dir: Path, randomly_searched_params: str = None) -> Path:
 
     Args:
         log_dir: Parent directory to create run directory in.
+        suffix: Optional suffix appended to the timestamp (e.g. task name).
         randomly_searched_params: String representing the randomly searched params.
 
     Returns:
         Path to the created run log directory.
     """
-    log_dir_run = log_dir / str(datetime.now().strftime("%Y-%m-%dT%H-%M-%S"))
-    for _ in range(10):
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    dir_name = f"{timestamp}_{suffix}" if suffix else timestamp
+    log_dir_run = log_dir / dir_name
+    for attempt in range(10):
         try:
             log_dir_run.mkdir(parents=True)
             break
         except FileExistsError:
-            time.sleep(0.1)
-            log_dir_run = log_dir / str(datetime.now().strftime("%Y-%m-%dT%H-%M-%S.%f"))
+            log_dir_run = log_dir / f"{dir_name}_{attempt + 1}"
     else:
         raise FileExistsError(f"Could not create unique run directory after 10 attempts: {log_dir_run}")
     if randomly_searched_params:
