@@ -13,10 +13,10 @@ train_common.min_delta = 1e-4
 train_common.weight = ""
 train_common.train_only = True
 
-# Fixed params for smoke testing / baseline pretraining
-TS2Vec.hidden_dim = 128
-TS2Vec.projection_dim = 64
-TS2Vec.encoder_layers = 3
+# TS2Vec paper defaults (Yue et al., 2022)
+TS2Vec.hidden_dim = 64
+TS2Vec.projection_dim = 320
+TS2Vec.encoder_layers = 10
 TS2Vec.dropout = 0.1
 TS2Vec.aug_noise_std = 0.05
 TS2Vec.temperature = 0.1

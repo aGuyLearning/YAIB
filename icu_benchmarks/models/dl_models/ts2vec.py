@@ -1,3 +1,6 @@
+import logging
+from pathlib import Path
+
 import gin
 import torch
 import torch.nn.functional as F
@@ -113,6 +116,13 @@ class TS2VecProbe(DLPredictionWrapper):
                 param.requires_grad = False
 
     def load_pretrained_encoder(self, checkpoint_path: str):
+        if not Path(checkpoint_path).is_file():
+            logging.warning(
+                "Pretrained encoder checkpoint not found: %s — skipping encoder weight loading "
+                "(this is expected when loading a fully-trained probe via --eval --source-dir).",
+                checkpoint_path,
+            )
+            return
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         state_dict = checkpoint.get("state_dict", checkpoint)
         encoder_state = {k.replace("encoder.", "", 1): v for k, v in state_dict.items() if k.startswith("encoder.")}
