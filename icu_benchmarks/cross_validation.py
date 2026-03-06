@@ -82,17 +82,22 @@ def execute_repeated_cv(
         cv_folds_to_train = cv_folds
 
     effective_cache_dir = cache_dir or log_dir
-    prev_sigterm = signal.getsignal(signal.SIGTERM)
+    prev_handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
 
-    def _cleanup_on_sigterm(signum, frame):
-        logging.warning(f"Received signal {signum}, cleaning up cache before exit.")
+    def _cleanup_on_signal(signum, frame):
+        logging.warning("Received signal %s, cleaning up cache before exit.", signum)
         clean_run_cache(effective_cache_dir)
-        if callable(prev_sigterm):
-            prev_sigterm(signum, frame)
+        prev = prev_handlers.get(signum)
+        if callable(prev):
+            prev(signum, frame)
         else:
-            raise SystemExit(128 + signum)
+            raise SystemExit(128 + (signum if signum is not None else 0))
 
-    signal.signal(signal.SIGTERM, _cleanup_on_sigterm)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, _cleanup_on_signal)
+        except (ValueError, OSError):
+            pass
 
     try:
         agg_loss = 0
@@ -183,7 +188,12 @@ def execute_repeated_cv(
         clean_run_cache(effective_cache_dir)
         return agg_loss / (cv_repetitions_to_train * cv_folds_to_train)
     finally:
-        signal.signal(signal.SIGTERM, prev_sigterm)
+        for sig, prev in prev_handlers.items():
+            if callable(prev):
+                try:
+                    signal.signal(sig, prev)
+                except (ValueError, OSError):
+                    pass
 
 
 @gin.configurable
