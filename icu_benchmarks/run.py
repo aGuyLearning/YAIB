@@ -2,6 +2,7 @@
 from datetime import datetime
 import gin
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
@@ -11,7 +12,7 @@ from icu_benchmarks.wandb_utils import (
     update_wandb_config,
     apply_wandb_sweep,
     set_wandb_experiment_name,
-    fetch_optuna_db_from_sibling_runs,
+    fetch_optuna_db_from_current_run,
 )
 from icu_benchmarks.tuning.hyperparameters import choose_and_bind_hyperparameters_optuna
 from scripts.plotting.utils import plot_aggregated_results
@@ -192,8 +193,8 @@ def main(my_args=tuple(sys.argv[1:])):
         log_full_line(f"Data directory: {data_dir.resolve()}", level=logging.INFO)
         run_dir = create_run_dir(log_dir, suffix=task)
         _register_cache_cleanup_on_signals(run_dir)
-        if hp_checkpoint is None and args.wandb_sweep:
-            hp_checkpoint = fetch_optuna_db_from_sibling_runs(download_dir=run_dir)
+        if hp_checkpoint is None and args.wandb_sweep and os.environ.get("WANDB_RESUME") == "must":
+            hp_checkpoint = fetch_optuna_db_from_current_run(download_dir=run_dir)
         choose_and_bind_hyperparameters_optuna(
             do_tune=args.tune,
             data_dir=data_dir,

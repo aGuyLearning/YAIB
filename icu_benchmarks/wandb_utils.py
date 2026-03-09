@@ -139,89 +139,56 @@ def set_wandb_experiment_name(args, mode):
         wandb.run.name = run_name
 
 
-def fetch_optuna_db_from_sibling_runs(
+def fetch_optuna_db_from_current_run(
     download_dir: Path,
     db_filename: str = "hyperparameter_tuning_logs.db",
 ) -> Optional[Path]:
-    """Download the Optuna DB from a crashed/failed sibling run of the current sweep.
+    """Download the Optuna DB from the current (resumed) run so tuning can continue.
 
-    Prefers versioned W&B artifacts (logged by the updated tune_step_callback)
-    and falls back to flat files uploaded via wandb.save.
+    Used when resuming a crashed/failed run (WANDB_RUN_ID + WANDB_RESUME=must).
+    Prefers versioned W&B artifact optuna-db-{run.id}, then run file upload.
 
-    Returns the local path to the downloaded DB, or None if nothing was found.
+    Returns the local path to the downloaded DB, or None if not found.
     """
-    if not wandb_running() or wandb.run.sweep_id is None:
+    if not wandb_running():
         return None
 
     api = wandb.Api()
-    sweep_path = f"{wandb.run.entity}/{wandb.run.project}/{wandb.run.sweep_id}"
+    run_id = wandb.run.id
+    entity = wandb.run.entity or api.default_entity
+    project = wandb.run.project
+
+    # Try artifact first
+    artifact_name = f"{entity}/{project}/optuna-db-{run_id}:latest"
     try:
-        sweep = api.sweep(sweep_path)
-    except Exception as exc:
-        logging.warning(f"Could not fetch sweep {sweep_path}: {exc}")
+        artifact = api.artifact(artifact_name)
+        artifact_dir = artifact.download(root=str(download_dir))
+        candidate = Path(artifact_dir) / db_filename
+        if candidate.exists():
+            local_path = download_dir / db_filename
+            if candidate != local_path:
+                candidate.rename(local_path)
+            n_trials = artifact.metadata.get("n_trials", "?")
+            logging.info(
+                "Downloaded Optuna DB from current run %s (%s trials) to %s",
+                run_id, n_trials, local_path,
+            )
+            return local_path
+    except Exception:
+        pass
+
+    # Fall back to flat file uploaded to this run
+    try:
+        run_files = {f.name for f in wandb.run.files()}
+    except Exception:
         return None
-
-    current_run_id = wandb.run.id
-    current_config = dict(wandb.config)
-
-    def configs_match(run_config: dict) -> bool:
-        for key in current_config:
-            if key.startswith("_") or key == "run-name":
-                continue
-            if run_config.get(key) != current_config.get(key):
-                return False
-        return True
-
-    best_n_trials = 0
-    best_local_path: Optional[Path] = None
-
-    for run in sweep.runs:
-        if run.id == current_run_id:
-            continue
-        if run.state not in ("crashed", "failed"):
-            continue
-        if not configs_match(dict(run.config)):
-            continue
-
-        # Try artifact first (has trial count in metadata for picking the best)
-        artifact_name = f"{wandb.run.entity}/{wandb.run.project}/optuna-db-{run.id}:latest"
-        try:
-            artifact = api.artifact(artifact_name)
-            n_trials = artifact.metadata.get("n_trials", 0)
-            if n_trials > best_n_trials:
-                artifact_dir = artifact.download(root=str(download_dir))
-                candidate = Path(artifact_dir) / db_filename
-                if candidate.exists():
-                    best_n_trials = n_trials
-                    best_local_path = download_dir / db_filename
-                    if candidate != best_local_path:
-                        candidate.rename(best_local_path)
-                    logging.info(
-                        f"Downloaded Optuna artifact from sibling run {run.id} "
-                        f"({n_trials} trials) to {best_local_path}"
-                    )
-            continue
-        except Exception:
-            pass
-
-        # Fall back to flat file
-        if best_local_path is not None:
-            continue
-        try:
-            run_files = {f.name for f in run.files()}
-        except Exception:
-            continue
-        if db_filename not in run_files:
-            continue
-        local_path = download_dir / db_filename
-        try:
-            run.file(db_filename).download(root=str(download_dir), replace=True)
-            logging.info(f"Downloaded Optuna DB (flat file) from sibling run {run.id} to {local_path}")
-            best_local_path = local_path
-        except Exception as exc:
-            logging.warning(f"Failed to download DB from run {run.id}: {exc}")
-            continue
-
-    if best_local_path is None:
-        logging.info("No sibling runs with an Optuna DB found for this sweep combination.")
-    return best_local_path
+    if db_filename not in run_files:
+        return None
+    local_path = download_dir / db_filename
+    try:
+        wandb.run.file(db_filename).download(root=str(download_dir), replace=True)
+        logging.info("Downloaded Optuna DB (flat file) from current run %s to %s", run_id, local_path)
+        return local_path
+    except Exception as exc:
+        logging.warning("Failed to download Optuna DB from current run %s: %s", run_id, exc)
+        return None
