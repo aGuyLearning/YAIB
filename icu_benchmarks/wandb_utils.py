@@ -1,9 +1,69 @@
 from argparse import Namespace
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
 import wandb
+
+
+def _get_resume_run_id() -> Optional[str]:
+    """Return run ID to resume if WANDB_RUN_ID and WANDB_RESUME=must are set."""
+    run_id = os.environ.get("WANDB_RUN_ID")
+    resume = os.environ.get("WANDB_RESUME", "").lower()
+    if run_id and resume == "must":
+        return run_id
+    return None
+
+
+def apply_wandb_resume(run_id: str, args: Namespace) -> Namespace:
+    """Load config from an existing run and init wandb with resume=\"must\".
+
+    Use when re-running a crashed/failed run so it continues as the same W&B run.
+    See: https://docs.wandb.ai/guides/runs/resuming
+    """
+    api = wandb.Api()
+    # run_path: "entity/project/run_id" (full) or run_id only (then use env for entity/project)
+    if "/" in run_id and run_id.count("/") >= 2:
+        run_path = run_id
+        parts = run_id.split("/")
+        entity = os.environ.get("WANDB_ENTITY", parts[0] if len(parts) >= 3 else "")
+        project = os.environ.get("WANDB_PROJECT", parts[1] if len(parts) >= 3 else "")
+    else:
+        entity = os.environ.get("WANDB_ENTITY", api.default_entity or "")
+        project = os.environ.get("WANDB_PROJECT", "")
+        run_path = f"{entity}/{project}/{run_id}"
+    try:
+        run = api.run(run_path)
+    except Exception as e:
+        logging.warning("Could not fetch run %s for resume: %s", run_path, e)
+        raise
+    config = dict(run.config)
+    # Apply sweep config to args (same keys as agent would set)
+    for key in ("data_dir", "task", "model", "seed", "name", "use_pretrained_imputation"):
+        if key in config:
+            val = config[key]
+            if key == "data_dir" and isinstance(val, str):
+                val = Path(val)
+            setattr(args, key, val)
+    if args.hyperparams is None:
+        args.hyperparams = []
+    for key, value in config.items():
+        if key.startswith("_") or key == "run-name":
+            continue
+        if key in ("data_dir", "task", "model", "seed", "name", "use_pretrained_imputation"):
+            continue
+        args.hyperparams.append(f"{key}=" + (("'" + str(value) + "'") if isinstance(value, str) else str(value)))
+    logging.info("Resuming run %s with config (data_dir=%s, task=%s, model=%s)", run_id, args.data_dir, args.task, args.model)
+    wandb.init(
+        entity=entity or None,
+        project=project or None,
+        id=run_id,
+        resume="must",
+        allow_val_change=True,
+        dir=args.log_dir,
+    )
+    return args
 
 
 def wandb_running() -> bool:
@@ -23,14 +83,14 @@ def update_wandb_config(config: dict) -> None:
 
 
 def apply_wandb_sweep(args: Namespace) -> Namespace:
-    """applies the wandb sweep configuration to the namespace object
+    """Applies the wandb sweep configuration to the namespace object.
 
-    Args:
-        args (Namespace): parsed arguments
-
-    Returns:
-        Namespace: arguments with sweep configuration applied (some are applied via hyperparams)
+    If WANDB_RUN_ID and WANDB_RESUME=must are set, resumes that run instead
+    (loads config from API and inits with resume=\"must\").
     """
+    resume_run_id = _get_resume_run_id()
+    if resume_run_id:
+        return apply_wandb_resume(resume_run_id, args)
     wandb.init(allow_val_change=True, dir=args.log_dir)
     sweep_config = wandb.config
     args.__dict__.update(sweep_config)

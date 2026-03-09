@@ -1,0 +1,7 @@
+# Length-of-stay regression: same as Regression but outcome range [0, 168] hours
+# (YAIB-cohorts los.py caps remaining LoS at 7*24h). Include base then override.
+include "configs/tasks/Regression.gin"
+
+# Override outcome scaling for LoS (hours); base Regression.gin uses 0–15 (kidney function).
+base_regression_preprocessor.outcome_min = 0
+base_regression_preprocessor.outcome_max = 168

@@ -3,11 +3,13 @@
 #   hidden_dim: unchanged at (32, 256) — aki/hirid optimum was 32, keeping lower bound
 #   layer_dim:  (1, 3)                 — kept at original; paper uses 3 layers for 5/9 models
 #   lr:         added "log" scale      — original lacked it; all observed optima at lower end
+#   epochs:     30 → 50               — sepsis LSTM used all 30 epochs without early stopping
 
 include "configs/prediction_models/reduced/common/DLCommon.gin"
 
 # Train params
 train_common.model = @LSTMNet
+train_common.epochs = 50
 
 # Optimizer params
 optimizer/hyperparameter.class_to_tune = @Adam

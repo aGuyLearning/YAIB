@@ -23,7 +23,8 @@ preprocess.preprocessor = @base_regression_preprocessor
 preprocess.vars = %vars
 preprocess.use_static = True
 
-# SPECIFYING REGRESSION OUTCOME SCALING
+# SPECIFYING REGRESSION OUTCOME SCALING (kidney function: 0–15 mg/dL)
+# For length-of-stay use task RegressionLoS (outcome 0–168 hours).
 base_regression_preprocessor.outcome_min = 0
 base_regression_preprocessor.outcome_max = 15
 
