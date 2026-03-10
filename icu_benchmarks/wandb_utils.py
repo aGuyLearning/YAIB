@@ -71,6 +71,20 @@ def wandb_running() -> bool:
     return wandb.run is not None
 
 
+def mark_wandb_run_cleanup_exit(exit_code: int = 1) -> None:
+    """Mark the current W&B run as failed (e.g. after SIGTERM/SIGINT cleanup).
+
+    Call this when exiting due to timeout/cancel so the run is not reported as
+    \"finished\". Uses wandb.finish(exit_code=...) so the run state becomes
+    \"failed\" and is excluded from finished_metrics.json / finished-only reports.
+    """
+    if wandb_running():
+        try:
+            wandb.finish(exit_code=exit_code)
+        except Exception as e:
+            logging.warning("Could not mark W&B run as cleanup exit: %s", e)
+
+
 def update_wandb_config(config: dict) -> None:
     """updates wandb config if wandb is running
 

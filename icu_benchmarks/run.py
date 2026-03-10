@@ -13,6 +13,7 @@ from icu_benchmarks.wandb_utils import (
     apply_wandb_sweep,
     set_wandb_experiment_name,
     fetch_optuna_db_from_current_run,
+    mark_wandb_run_cleanup_exit,
 )
 from icu_benchmarks.tuning.hyperparameters import choose_and_bind_hyperparameters_optuna
 from scripts.plotting.utils import plot_aggregated_results
@@ -40,6 +41,8 @@ def _cleanup_run_cache_on_signal(signum, frame):
     if run_dir is not None:
         logging.warning("Received signal %s, cleaning up cache before exit.", signum)
         clean_run_cache(run_dir)
+    # Mark W&B run as failed so it is not reported as "finished" (cleanup-only exit).
+    mark_wandb_run_cleanup_exit(exit_code=128 + (signum if signum is not None else 0))
     prev = _prev_signal_handlers.get(signum)
     if callable(prev):
         prev(signum, frame)
