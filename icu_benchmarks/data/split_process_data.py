@@ -29,6 +29,7 @@ def preprocess_data(
     data_dir: Path,
     file_names: dict[str, str] | Any = gin.REQUIRED,
     preprocessor: type[PolarsClassificationPreprocessor | PolarsRegressionPreprocessor] = PolarsClassificationPreprocessor,
+    preprocessor_kwargs: Optional[dict[str, Any]] = None,
     use_static: bool = True,
     vars: dict[str, str | list[str]] | Any = gin.REQUIRED,
     modality_mapping: Optional[dict[str, list[str]]] = None,
@@ -57,7 +58,8 @@ def preprocess_data(
         use_static: Whether to use static features (for DL models).
         complete_train: Whether to use all data for training/validation.
         runmode: Run mode. Can be one of the values of RunMode
-        preprocessor: Define the preprocessor.
+        preprocessor: Preprocessor class (not instance) to use.
+        preprocessor_kwargs: Optional kwargs passed to the preprocessor constructor (e.g. strict_outcome_alignment, generate_features).
         data_dir: Path to the directory holding the data.
         file_names: Contains the parquet file names in data_dir.
         vars: Contains the names of columns in the data.
@@ -125,11 +127,14 @@ def preprocess_data(
     effective_cache_dir = cache_dir if cache_dir is not None else data_dir / "cache"
     preproc_dir = effective_cache_dir.parent / "preproc" if cache_dir is not None else data_dir / "preproc"
     cache_filename = f"s_{seed}_r_{repetition_index}_f_{fold_index}_t_{train_size}_d_{debug}"
-    preprocessor_instance: Preprocessor = preprocessor(
-        use_static_features=use_static,
-        save_cache=preproc_dir / (cache_filename + "_recipe") if generate_cache else None,
-        vars_to_exclude=vars_to_exclude,
-    )
+    preprocessor_call_kwargs: dict[str, Any] = {
+        "use_static_features": use_static,
+        "save_cache": preproc_dir / (cache_filename + "_recipe") if generate_cache else None,
+        "vars_to_exclude": vars_to_exclude,
+    }
+    if preprocessor_kwargs:
+        preprocessor_call_kwargs.update(preprocessor_kwargs)
+    preprocessor_instance: Preprocessor = preprocessor(**preprocessor_call_kwargs)
     if isinstance(preprocessor_instance, PandasClassificationPreprocessor):
         preprocessor_instance.set_imputation_model(pretrained_imputation_model)
 
