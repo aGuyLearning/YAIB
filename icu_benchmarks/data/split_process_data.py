@@ -115,7 +115,8 @@ def preprocess_data(
     dumped_file_names = json.dumps(file_names, sort_keys=True)
     dumped_vars = json.dumps(vars, sort_keys=True)
 
-    logging.info(f"Using preprocessor: {preprocessor.__name__}")
+    preprocessor_name = getattr(preprocessor, "__name__", type(preprocessor).__name__)
+    logging.info(f"Using preprocessor: {preprocessor_name}")
 
     cat_clinical_notes = modality_mapping.get("cat_clinical_notes")
     cat_med_embeddings_map = modality_mapping.get("cat_med_embeddings_map")
