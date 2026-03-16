@@ -8,6 +8,26 @@ from typing import TYPE_CHECKING, Optional
 import gin
 from pytorch_lightning import seed_everything
 
+
+def _is_fold_complete(fold_dir: Path) -> bool:
+    """Return True if the fold at fold_dir has already been fully trained and evaluated."""
+    return (fold_dir / "durations.json").is_file()
+
+
+def _load_fold_loss(fold_dir: Path) -> float:
+    """Recover the test loss from a previously completed fold directory."""
+    test_metrics_path = fold_dir / "test_metrics.json"
+    val_metrics_path = fold_dir / "val_metrics.json"
+    for metrics_path in (test_metrics_path, val_metrics_path):
+        if metrics_path.is_file():
+            with open(metrics_path, "r") as f:
+                metrics = json.load(f)
+            for key in ("test/loss", "val/loss", "loss"):
+                if key in metrics:
+                    return float(metrics[key])
+    raise FileNotFoundError(f"Could not recover fold loss from {fold_dir}: no metrics file found.")
+
+
 from icu_benchmarks.cache_utils import clean_run_cache
 from icu_benchmarks.constants import RunMode
 from icu_benchmarks.data.split_process_data import preprocess_data
@@ -109,12 +129,34 @@ def execute_repeated_cv(
 
         else:
             logging.info(f"Starting nested CV with {cv_repetitions_to_train} repetitions of {cv_folds_to_train} folds.")
+
+        if trial is None:
+            completed_folds = [
+                (r, f)
+                for r in range(cv_repetitions_to_train)
+                for f in range(cv_folds_to_train)
+                if _is_fold_complete(log_dir / f"repetition_{r}" / f"fold_{f}")
+            ]
+            if completed_folds:
+                logging.info(
+                    f"Resuming training: {len(completed_folds)} fold(s) already complete, skipping them. "
+                    f"Completed: {completed_folds}"
+                )
+
         # Train model for each repetition (a manner of splitting the folds)
         for repetition in range(cv_repetitions_to_train):
             # Train model for each fold configuration (i.e, one fold is test fold and the rest are train/val folds)
             for fold_index in range(cv_folds_to_train):
                 repetition_fold_dir = log_dir / f"repetition_{repetition}" / f"fold_{fold_index}"
                 repetition_fold_dir.mkdir(parents=True, exist_ok=True)
+
+                if trial is None and _is_fold_complete(repetition_fold_dir):
+                    fold_loss = _load_fold_loss(repetition_fold_dir)
+                    logging.info(
+                        f"Skipping completed fold {fold_index} (rep {repetition}), recovered loss={fold_loss:.4f}."
+                    )
+                    agg_loss += fold_loss
+                    continue
 
                 start_time = datetime.now()
                 data = preprocess_data(
