@@ -149,7 +149,7 @@ def set_wandb_experiment_name(args, mode):
         run_name += "_complete_training"
 
     if wandb_running():
-        wandb.config.update({"run-name": run_name}, allow_val_change=True)
+        wandb.config.update({"run-name": run_name})
         wandb.run.name = run_name
 
 
