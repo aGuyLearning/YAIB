@@ -1,22 +1,29 @@
 # Settings for TS2Vec model.
 
 # Imports to register models/wrappers
+import gin.torch.external_configurables
 import icu_benchmarks.models.wrappers
 import icu_benchmarks.models.dl_models.ts2vec
 
+# Match downstream data pipeline (historical aggregates); clear preprocessor caches if toggling.
+base_classification_preprocessor.generate_features = True
+
 # Core train params
 train_common.model = @TS2Vec
-train_common.epochs = 50
-train_common.batch_size = 64
-train_common.patience = 5
+train_common.optimizer = @Adam
+Adam.lr = 3e-4
+Adam.weight_decay = 1e-5
+train_common.epochs = 80
+train_common.batch_size = 128
+train_common.patience = 8
 train_common.min_delta = 1e-4
 train_common.weight = ""
 train_common.train_only = True
 
-# TS2Vec paper defaults (Yue et al., 2022)
-TS2Vec.hidden_dim = 64
-TS2Vec.projection_dim = 320
-TS2Vec.encoder_layers = 10
+# Larger encoder / projector for higher input dimension (generate_features=True)
+TS2Vec.hidden_dim = 256
+TS2Vec.projection_dim = 512
+TS2Vec.encoder_layers = 8
 TS2Vec.dropout = 0.1
 TS2Vec.aug_noise_std = 0.05
-TS2Vec.temperature = 0.1
+TS2Vec.temperature = 0.07

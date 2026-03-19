@@ -140,11 +140,6 @@ def aggregate_results(log_dir: Path, execution_time: timedelta = None):
         shap_values = pl.concat(shap_values_test)
         shap_values.write_parquet(log_dir / "aggregated_shap_values.parquet")
 
-    try:
-        shap_values = pl.concat(shap_values_test)
-        shap_values.write_parquet(log_dir / "aggregated_shap_values.parquet")
-    except Exception as e:
-        logging.error(f"Error aggregating or writing SHAP values: {e}")
     # Aggregate results per metric
     list_scores = {}
     for repetition, folds in aggregated.items():
@@ -218,7 +213,7 @@ def load_pretrained_imputation_model(use_pretrained_imputation):
 
     if use_pretrained_imputation is not None:
         logging.info("Using pretrained imputation from" + str(use_pretrained_imputation))
-        pretrained_imputation_model_checkpoint = torch.load(use_pretrained_imputation, map_location=torch.device("cpu"))
+        pretrained_imputation_model_checkpoint = torch.load(use_pretrained_imputation, map_location=torch.device("cpu"), weights_only=False)
         if isinstance(pretrained_imputation_model_checkpoint, dict):
             imputation_model_class = pretrained_imputation_model_checkpoint["class"]
             pretrained_imputation_model = imputation_model_class(**pretrained_imputation_model_checkpoint["hyper_parameters"])
