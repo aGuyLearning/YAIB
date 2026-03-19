@@ -1,10 +1,15 @@
 from argparse import Namespace
 import logging
 import os
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Optional
 
 import wandb
+
+_CV_FOLD_ARTIFACT_TYPE = "cv-fold-state"
+_CV_FOLD_JSON_NAMES = ("durations.json", "test_metrics.json", "val_metrics.json")
 
 
 def _get_resume_run_id() -> Optional[str]:
@@ -206,3 +211,123 @@ def fetch_optuna_db_from_current_run(
     except Exception as exc:
         logging.warning("Failed to download Optuna DB from current run %s: %s", run_id, exc)
         return None
+
+
+def _iter_cv_fold_resume_files(log_dir: Path):
+    """Yield (absolute_path, artifact_relative_posix) for JSON files in completed folds under log_dir."""
+    if not log_dir.is_dir():
+        return
+    for rep_dir in sorted(log_dir.glob("repetition_*")):
+        if not rep_dir.is_dir():
+            continue
+        for fold_dir in sorted(rep_dir.glob("fold_*")):
+            if not fold_dir.is_dir():
+                continue
+            if not (fold_dir / "durations.json").is_file():
+                continue
+            rel = fold_dir.relative_to(log_dir).as_posix()
+            for fname in _CV_FOLD_JSON_NAMES:
+                path = fold_dir / fname
+                if path.is_file():
+                    yield path, f"{rel}/{fname}"
+
+
+def upload_cv_fold_state_incremental(
+    log_dir: Path,
+    repetition: int,
+    fold_index: int,
+    cv_repetitions_to_train: Optional[int] = None,
+    cv_folds_to_train: Optional[int] = None,
+) -> None:
+    """Upload all completed-fold JSON state to W&B so resume can rehydrate a fresh run_dir.
+
+    Only call from final training (trial is None); tuning uses a temp log_dir and must not
+    upload. Each log creates a new artifact version with the full set of completed folds.
+    """
+    if not wandb_running():
+        return
+
+    paths = list(_iter_cv_fold_resume_files(log_dir))
+    if not paths:
+        return
+
+    run_id = wandb.run.id
+    artifact = wandb.Artifact(
+        f"cv-folds-{run_id}",
+        type=_CV_FOLD_ARTIFACT_TYPE,
+        metadata={
+            "repetition": repetition,
+            "fold_index": fold_index,
+            "cv_repetitions_to_train": cv_repetitions_to_train,
+            "cv_folds_to_train": cv_folds_to_train,
+            "n_fold_files": len(paths),
+        },
+    )
+    for local_path, name in paths:
+        artifact.add_file(str(local_path), name=name)
+    try:
+        wandb.log_artifact(artifact)
+        logging.info(
+            "Uploaded CV fold state to W&B (%s files, last completed rep=%s fold=%s)",
+            len(paths),
+            repetition,
+            fold_index,
+        )
+    except Exception as exc:
+        logging.warning("Failed to upload CV fold state artifact: %s", exc)
+
+
+def fetch_cv_fold_state_from_current_run(download_dir: Path) -> bool:
+    """Download cv-folds-{run.id} from W&B and merge repetition_*/fold_* JSON into download_dir.
+
+    Used when resuming (WANDB_RESUME=must) so skip-completed-fold logic sees prior folds under
+    the new timestamped run_dir. Returns True if any files were merged.
+    """
+    if not wandb_running():
+        return False
+
+    api = wandb.Api()
+    run_id = wandb.run.id
+    entity = wandb.run.entity or api.default_entity
+    project = wandb.run.project
+    artifact_name = f"{entity}/{project}/cv-folds-{run_id}:latest"
+
+    try:
+        artifact = api.artifact(artifact_name)
+    except Exception:
+        logging.warning(
+            "No CV fold state artifact for run %s (%s); starting with empty run_dir.",
+            run_id,
+            artifact_name,
+        )
+        return False
+
+    merged = 0
+    with tempfile.TemporaryDirectory(prefix="cv_folds_wandb_") as tmp:
+        artifact_dir = Path(artifact.download(root=tmp))
+        for rep_dir in sorted(artifact_dir.glob("repetition_*")):
+            if not rep_dir.is_dir():
+                continue
+            for fold_dir in sorted(rep_dir.glob("fold_*")):
+                if not fold_dir.is_dir():
+                    continue
+                dest_fold = download_dir / rep_dir.name / fold_dir.name
+                dest_fold.mkdir(parents=True, exist_ok=True)
+                for fname in _CV_FOLD_JSON_NAMES:
+                    src = fold_dir / fname
+                    if src.is_file():
+                        shutil.copy2(src, dest_fold / fname)
+                        merged += 1
+
+    if merged:
+        logging.info(
+            "Merged CV fold state from W&B into %s (%s JSON file(s))",
+            download_dir,
+            merged,
+        )
+    else:
+        logging.warning(
+            "Downloaded CV fold artifact for run %s but found no fold JSON to merge.",
+            run_id,
+        )
+    return merged > 0

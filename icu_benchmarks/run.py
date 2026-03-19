@@ -13,6 +13,7 @@ from icu_benchmarks.wandb_utils import (
     apply_wandb_sweep,
     set_wandb_experiment_name,
     fetch_optuna_db_from_current_run,
+    fetch_cv_fold_state_from_current_run,
     mark_wandb_run_cleanup_exit,
 )
 from icu_benchmarks.tuning.hyperparameters import choose_and_bind_hyperparameters_optuna
@@ -222,6 +223,8 @@ def main(my_args=tuple(sys.argv[1:])):
 
     try:
         start_time = datetime.now()
+        if args.wandb_sweep and os.environ.get("WANDB_RESUME", "").lower() == "must":
+            fetch_cv_fold_state_from_current_run(run_dir)
         if mode == RunMode.pretrain:
             execute_pretrain_loop(
                 data_dir=data_dir,

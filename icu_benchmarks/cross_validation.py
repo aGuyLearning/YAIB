@@ -34,7 +34,7 @@ from icu_benchmarks.data.split_process_data import preprocess_data
 from icu_benchmarks.models.train import train_common
 from icu_benchmarks.models.utils import JsonResultLoggingEncoder
 from icu_benchmarks.run_utils import aggregate_results, log_full_line
-from icu_benchmarks.wandb_utils import wandb_log
+from icu_benchmarks.wandb_utils import wandb_log, wandb_running, upload_cv_fold_state_incremental
 
 if TYPE_CHECKING:
     import optuna
@@ -201,6 +201,14 @@ def execute_repeated_cv(
 
                 with open(repetition_fold_dir / "durations.json", "w") as f:
                     json.dump(durations, f, cls=JsonResultLoggingEncoder)
+                if wandb and trial is None and wandb_running():
+                    upload_cv_fold_state_incremental(
+                        log_dir,
+                        repetition,
+                        fold_index,
+                        cv_repetitions_to_train=cv_repetitions_to_train,
+                        cv_folds_to_train=cv_folds_to_train,
+                    )
                 if wandb:
                     wandb_log({"Iteration": repetition * cv_folds_to_train + fold_index})
                 if repetition * cv_folds_to_train + fold_index > 1 and mode != RunMode.pretrain:
