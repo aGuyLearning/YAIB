@@ -1,0 +1,6 @@
+# TS2VecProbe + length-of-stay regression: use with
+#   -t RegressionLoS -m TS2VecProbe -e ProbeRegressionLoS
+# Aligns dynamic-only inputs with Pretrain.gin (preprocess.use_static = False).
+include "configs/prediction_models/TS2VecProbe.gin"
+
+preprocess.use_static = False

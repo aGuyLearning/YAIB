@@ -24,6 +24,9 @@ parameters:
   model:
     values:
       - TS2VecProbe
+  experiment:
+    values:
+      - ProbeClassification
   seed:
     values:
       - 1111

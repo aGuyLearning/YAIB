@@ -1,0 +1,6 @@
+# TS2VecProbe + regression task: use with
+#   -t Regression -m TS2VecProbe -e ProbeRegression
+# Aligns dynamic-only inputs with Pretrain.gin (preprocess.use_static = False).
+include "configs/prediction_models/TS2VecProbe.gin"
+
+preprocess.use_static = False

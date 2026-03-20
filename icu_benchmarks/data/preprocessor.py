@@ -273,6 +273,7 @@ class PolarsRegressionPreprocessor(PolarsClassificationPreprocessor):
         generate_features: bool = False,
         scaling: bool = True,
         use_static_features: bool = True,
+        strict_outcome_alignment: bool = True,
         outcome_max=None,
         outcome_min=None,
         save_cache: Optional[Union[str, Path]] = None,
@@ -295,6 +296,7 @@ class PolarsRegressionPreprocessor(PolarsClassificationPreprocessor):
             generate_features=generate_features,
             scaling=scaling,
             use_static_features=use_static_features,
+            strict_outcome_alignment=strict_outcome_alignment,
             save_cache=save_cache,
             load_cache=load_cache,
             vars_to_exclude=vars_to_exclude,
@@ -339,8 +341,8 @@ class PolarsRegressionPreprocessor(PolarsClassificationPreprocessor):
         else:
             # If the range is not predefined, use MinMaxScaler
             outcome_rec.add_step(StepSklearn(MinMaxScaler(), sel=all_outcomes()))
-        outcome_rec.prep()
-        data[split][DataSegment.outcome] = pl.DataFrame(outcome_rec.bake())
+        # outcome_rec.prep()
+        data[split][DataSegment.outcome] = pl.DataFrame(outcome_rec.prep())
         return data
 
 

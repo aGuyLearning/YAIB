@@ -93,7 +93,7 @@ def read_probe_jobs(args: argparse.Namespace) -> list[ProbeJob]:
                 model="TS2VecProbe",
                 data_dir="demo_data/kidney_function/eicu_demo",
                 name="eicu_demo_kf_probe",
-                extra_hparams=["preprocess.use_static=False", "execute_repeated_cv.cv_repetitions_to_train=1", "execute_repeated_cv.cv_folds_to_train=1"],
+                extra_hparams=["execute_repeated_cv.cv_repetitions_to_train=1", "execute_repeated_cv.cv_folds_to_train=1"],
             ),
         ]
     return jobs
@@ -130,6 +130,15 @@ def run_step(cmd: list[str], phase: str, name: str, dry_run: bool, cwd: Path, mp
         started_at=started,
         ended_at=ended,
     )
+
+
+def probe_experiment_for_task(task_gin: str) -> str | None:
+    """YAIB experiment gin so TS2VecProbe matches pretrain (preprocess.use_static=False)."""
+    return {
+        "BinaryClassification": "ProbeClassification",
+        "Regression": "ProbeRegression",
+        "RegressionLoS": "ProbeRegressionLoS",
+    }.get(task_gin)
 
 
 def find_latest_pretrain_checkpoint(pretrain_log_dir: Path, run_name: str) -> Path:
@@ -206,6 +215,10 @@ def build_probe_cmd(
         "-s",
         str(args.seed),
     ]
+    if job.model == "TS2VecProbe":
+        exp = probe_experiment_for_task(job.task)
+        if exp:
+            cmd.extend(["-e", exp])
     if args.cpu:
         cmd.append("--cpu")
     if args.debug:

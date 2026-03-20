@@ -45,7 +45,7 @@ def apply_wandb_resume(run_id: str, args: Namespace) -> Namespace:
         raise
     config = dict(run.config)
     # Apply sweep config to args (same keys as agent would set)
-    for key in ("data_dir", "task", "model", "seed", "name", "use_pretrained_imputation"):
+    for key in ("data_dir", "task", "model", "seed", "name", "use_pretrained_imputation", "experiment"):
         if key in config:
             val = config[key]
             if key == "data_dir" and isinstance(val, str):
@@ -56,7 +56,7 @@ def apply_wandb_resume(run_id: str, args: Namespace) -> Namespace:
     for key, value in config.items():
         if key.startswith("_") or key == "run-name":
             continue
-        if key in ("data_dir", "task", "model", "seed", "name", "use_pretrained_imputation"):
+        if key in ("data_dir", "task", "model", "seed", "name", "use_pretrained_imputation", "experiment"):
             continue
         args.hyperparams.append(f"{key}=" + (("'" + str(value) + "'") if isinstance(value, str) else str(value)))
     logging.info("Resuming run %s with config (data_dir=%s, task=%s, model=%s)", run_id, args.data_dir, args.task, args.model)
@@ -116,6 +116,8 @@ def apply_wandb_sweep(args: Namespace) -> Namespace:
     if args.hyperparams is None:
         args.hyperparams = []
     for key, value in sweep_config.items():
+        if key == "experiment":
+            continue
         args.hyperparams.append(f"{key}=" + (("'" + value + "'") if isinstance(value, str) else str(value)))
     logging.info(f"hyperparams after loading sweep config: {args.hyperparams}")
     return args

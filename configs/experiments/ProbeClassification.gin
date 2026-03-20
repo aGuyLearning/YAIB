@@ -1,0 +1,6 @@
+# TS2VecProbe + classification task: use with
+#   -t BinaryClassification -m TS2VecProbe -e ProbeClassification
+# Aligns dynamic-only inputs with Pretrain.gin (preprocess.use_static = False).
+include "configs/prediction_models/TS2VecProbe.gin"
+
+preprocess.use_static = False
