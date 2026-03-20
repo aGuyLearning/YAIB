@@ -188,11 +188,11 @@ def main(my_args=tuple(sys.argv[1:])):
         model_path = (
             Path("configs") / ("imputation_models" if mode == RunMode.imputation else "prediction_models") / f"{model}.gin"
         )
-        task_gin = Path(f"configs/tasks/{task}.gin")
-        if args.experiment:
-            gin_config_files = [Path(f"configs/experiments/{args.experiment}.gin")]
-        else:
-            gin_config_files = [model_path, task_gin]
+        gin_config_files = (
+            [Path(f"configs/experiments/{args.experiment}.gin")]
+            if args.experiment
+            else [model_path, Path(f"configs/tasks/{task}.gin")]
+        )
         gin.parse_config_files_and_bindings(gin_config_files, args.hyperparams, finalize_config=False)
         log_full_line(f"Data directory: {data_dir.resolve()}", level=logging.INFO)
         run_dir = create_run_dir(log_dir, suffix=task)
