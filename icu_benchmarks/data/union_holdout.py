@@ -81,6 +81,7 @@ def _compute_per_pair_holdouts(
             seed,
             stratify=stratify,
             balance_by_pool_source=balance_by_pool_source,
+            split_context=c.pair_key(),
         )
         if pooled_index_for_dataset is not None:
             if c.dataset not in pooled_index_for_dataset:

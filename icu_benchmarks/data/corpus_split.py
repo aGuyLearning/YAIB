@@ -41,6 +41,8 @@ def _split_stays_one_pool(
     holdout_fraction: float,
     seed: int,
     stratify: bool,
+    *,
+    log_context: Optional[str] = None,
 ) -> tuple[list[int], list[int]]:
     if not stays:
         return [], []
@@ -51,8 +53,14 @@ def _split_stays_one_pool(
     if stratify and labels is not None and _stratify_viable(labels):
         strat_labels = labels
     elif stratify and labels is not None:
+        ctx = f" [{log_context}]" if log_context else ""
+        counts = dict(Counter(labels))
         logger.warning(
-            "Stratified holdout split skipped for this group (need >=2 stays per class); using unstratified split."
+            "Stratified holdout split skipped%s: need >=2 stays per label class (min count >= 2); "
+            "n_stays=%d label_counts=%s; using unstratified split.",
+            ctx,
+            len(stays),
+            counts,
         )
 
     train_s, test_s = train_test_split(
@@ -74,6 +82,7 @@ def split_stays_pretrain_holdout(
     *,
     stratify: bool,
     balance_by_pool_source: bool,
+    split_context: Optional[str] = None,
 ) -> tuple[set[int], set[int]]:
     """Return (pretrain_stays, holdout_stays) as sets of int stay ids."""
     stays = list_stays_in_order(outcome, group_col)
@@ -86,7 +95,8 @@ def split_stays_pretrain_holdout(
         label_lut = per_stay_max_label(outcome, group_col, label_col)
         labels_list = [label_lut[s] for s in stays]
     elif stratify:
-        logger.warning("Label column %r not found; using unstratified split.", label_col)
+        ctx = f" [{split_context}]" if split_context else ""
+        logger.warning("Label column %r not found%s; using unstratified split.", label_col, ctx)
         stratify = False
 
     pretrain: list[int] = []
@@ -98,11 +108,28 @@ def split_stays_pretrain_holdout(
             by_src[pool_source_id_from_stay_id(int(s))].append(int(s))
         for src, sid_list in sorted(by_src.items()):
             labs = [label_lut[s] for s in sid_list] if labels_list is not None else None
-            pt, hd = _split_stays_one_pool(sid_list, labs, holdout_fraction, seed + src * 10_003, stratify)
+            bucket_ctx = (
+                f"{split_context} pool_source_id={src}" if split_context else f"pool_source_id={src}"
+            )
+            pt, hd = _split_stays_one_pool(
+                sid_list,
+                labs,
+                holdout_fraction,
+                seed + src * 10_003,
+                stratify,
+                log_context=bucket_ctx,
+            )
             pretrain.extend(pt)
             holdout.extend(hd)
     else:
-        pt, hd = _split_stays_one_pool(stays, labels_list, holdout_fraction, seed, stratify)
+        pt, hd = _split_stays_one_pool(
+            stays,
+            labels_list,
+            holdout_fraction,
+            seed,
+            stratify,
+            log_context=split_context,
+        )
         pretrain.extend(pt)
         holdout.extend(hd)
 
@@ -237,6 +264,7 @@ def run_corpus_split(
         seed,
         stratify=stratify,
         balance_by_pool_source=balance_by_pool_source,
+        split_context=str(input_dir),
     )
 
     outcome_stays = validate_stays_partition(outcome, group_col, pretrain_stays, holdout_stays)
