@@ -27,6 +27,37 @@ from icu_benchmarks.data.pooled_stay_id import apply_pooled_stay_id_suffix
 
 logger = logging.getLogger(__name__)
 
+# Task folder names (data_root/<task>/...) with continuous regression outcomes.
+# Classification-style label stratification (sklearn) is inappropriate and differs from
+# YAIB regression CV (no stratify on label). Align holdout with that behavior.
+REGRESSION_HOLDOUT_TASK_SLUGS: frozenset[str] = frozenset({"los", "kidney_function"})
+
+
+def effective_holdout_stratify(stratify_requested: bool, task: str) -> bool:
+    """Whether to stratify the holdout split for this task (per-pair)."""
+    if not stratify_requested:
+        return False
+    if task in REGRESSION_HOLDOUT_TASK_SLUGS:
+        return False
+    return True
+
+
+def _manifest_regression_stratify_fields(
+    stratify_requested: bool, corpora: Sequence[TaskDatasetCorpus]
+) -> dict[str, Any]:
+    if not stratify_requested:
+        return {}
+    reg_present = sorted({c.task for c in corpora if c.task in REGRESSION_HOLDOUT_TASK_SLUGS})
+    if not reg_present:
+        return {}
+    return {
+        "holdout_stratify_regression_tasks_unstratified": reg_present,
+        "holdout_stratify_note": (
+            "stratify=true uses label stratification only for classification tasks; "
+            "los and kidney_function use unstratified holdout (regression), matching YAIB regression CV."
+        ),
+    }
+
 
 @dataclass(frozen=True)
 class TaskDatasetCorpus:
@@ -73,13 +104,19 @@ def _compute_per_pair_holdouts(
             raise ValueError(f"{c.pair_key()}: group_col {group_col!r} missing from outcome")
 
         seed = pair_seed(c.task, c.dataset, base_seed)
+        pair_stratify = effective_holdout_stratify(stratify, c.task)
+        if stratify and not pair_stratify:
+            logger.info(
+                "Holdout for %s: stratify disabled (regression task; random split, like YAIB regression CV).",
+                c.pair_key(),
+            )
         _pre, holdout = split_stays_pretrain_holdout(
             outcome,
             group_col,
             label_col,
             holdout_fraction,
             seed,
-            stratify=stratify,
+            stratify=pair_stratify,
             balance_by_pool_source=balance_by_pool_source,
             split_context=c.pair_key(),
         )
@@ -450,6 +487,8 @@ def run_union_holdout_pretrain(
         pooled_stay_id_suffix_applied=suffix_on,
         pooled_merge_order=pooled_merge_order,
     )
+    manifest.update(_manifest_regression_stratify_fields(stratify, corpora))
+
     manifest_path = Path(manifest_path).resolve()
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     with open(manifest_path, "w", encoding="utf-8") as f:
@@ -601,6 +640,8 @@ def run_hierarchical_union_holdout_pretrain(
         pooled_stay_id_suffix_applied=suffix_on,
         pooled_merge_order=pooled_merge_order,
     )
+    manifest.update(_manifest_regression_stratify_fields(stratify, corpora))
+
     manifest_path = Path(manifest_path).resolve()
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     with open(manifest_path, "w", encoding="utf-8") as f:

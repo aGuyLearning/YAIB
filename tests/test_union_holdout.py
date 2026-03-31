@@ -23,12 +23,22 @@ from icu_benchmarks.data.union_holdout import (
     compute_hierarchical_union_holdout,
     compute_union_holdout,
     discover_single_site_corpora,
+    effective_holdout_stratify,
     merged_outcome_stays,
     run_union_holdout_pretrain,
     validate_union_against_merged,
     write_merged_holdout_subset,
     write_pretrain_excluding_stays,
 )
+
+
+def test_effective_holdout_stratify_regression_tasks():
+    assert effective_holdout_stratify(True, "los") is False
+    assert effective_holdout_stratify(True, "kidney_function") is False
+    assert effective_holdout_stratify(True, "mortality24") is True
+    assert effective_holdout_stratify(True, "aki") is True
+    assert effective_holdout_stratify(False, "mortality24") is False
+    assert effective_holdout_stratify(False, "los") is False
 
 
 def _write_outc(path: Path, stay_ids: list[int], labels: list[int] | None = None) -> None:

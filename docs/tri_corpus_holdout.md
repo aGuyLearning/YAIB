@@ -85,11 +85,13 @@ Same **final** stay set as §2.1: holdout per `task::site`, then **union** withi
 
 **Scan layout:** only single-site YAIB dirs `DATA_ROOT/<task>/<dataset>/outc.parquet` (not pooled `eicu_hirid`). For single-site leaves, keep **`balance_by_pool_source` off** unless you know `stay_id` uses pooled suffixes inside that folder—otherwise you can see spurious stratify-skip warnings.
 
+**Stratify vs regression:** With default stratify enabled, **`los`** and **`kidney_function`** still use **unstratified** random holdout per pair (continuous labels; matches YAIB regression CV). Classification tasks use label stratification unless **`--no-stratify`**. The manifest may include `holdout_stratify_regression_tasks_unstratified` and `holdout_stratify_note` when regression tasks are present.
+
 **Pooled `stay_id` suffix (default on):** By default the hierarchical CLI remaps leaf holdout IDs with the same rule as `merge_pooled_corpora` (`--pooled-merge-order` default `eicu,hirid,miiv` for the usual tri build). The manifest includes `pooled_stay_id_suffix_applied` and `pooled_merge_order`. Use **`--no-pooled-stay-id-suffix`** if your leaf parquets already use suffixed IDs. If your merge used a different `--corpus-dirs` order, set `--pooled-merge-order` to match.
 
 **CLI:** `scripts/data/split_merged_corpus_hierarchical_holdout.py` — `--data-root`, `--tasks` (comma-separated), `--datasets` (default `eicu,hirid,miiv`), optional **`--require-all-pairs`** to fail if any expected `task/dataset` pair is missing `outc.parquet`.
 
-**Repo wrapper (Bachelor root):** `bash sbatches/build_tri_corpus_hierarchical_holdout.sh` — defaults: merged `data/corpus_eicu_hirid_miiv`, pretrain `data/corpus_eicu_hirid_miiv_pretrain_hier`, holdout `data/corpus_eicu_hirid_miiv_holdout_hier` (set **`NO_HOLDOUT=1`** to skip the holdout directory).
+**Repo wrapper (Bachelor root):** `bash sbatches/build_tri_corpus_hierarchical_holdout.sh` — defaults: merged `data/corpus_eicu_hirid_miiv`, pretrain `data/corpus_eicu_hirid_miiv_pretrain`, holdout `data/corpus_eicu_hirid_miiv_holdout` (override with `OUT_PRETRAIN` / `OUT_HOLDOUT`; set **`NO_HOLDOUT=1`** to skip the holdout directory).
 
 **Manifest:** `hierarchical_union_holdout_manifest.json` (default next to pretrain output) has `kind: hierarchical_union_holdout_pretrain`, full `per_pair` stay lists, and `per_dataset` with `task_pair_keys`, `n_holdout_stays`, and `union_holdout_stay_ids` per site.
 
