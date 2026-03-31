@@ -15,7 +15,9 @@ if str(_YAIB_ROOT) not in sys.path:
 
 from icu_benchmarks.data.union_holdout import (
     TaskDatasetCorpus,
+    compute_hierarchical_union_holdout,
     compute_union_holdout,
+    discover_single_site_corpora,
     merged_outcome_stays,
     run_union_holdout_pretrain,
     validate_union_against_merged,
@@ -225,6 +227,66 @@ def test_run_union_holdout_writes_manifest(tmp_path: Path):
     assert data["kind"] == "union_holdout_pretrain"
     assert "per_pair" in data
     assert data["n_extra_union_not_in_merged"] == 0
+
+
+def test_discover_single_site_corpora_skips_missing(tmp_path: Path):
+    root = tmp_path / "data"
+    _write_outc(root / "t1" / "eicu" / "outc.parquet", list(range(10, 30)), [i % 2 for i in range(20)])
+    found = discover_single_site_corpora(
+        root,
+        ["t1", "t2"],
+        ["eicu", "miiv"],
+        require_all_pairs=False,
+    )
+    assert len(found) == 1
+    assert found[0].pair_key() == "t1::eicu"
+
+
+def test_discover_single_site_corpora_require_all_raises(tmp_path: Path):
+    root = tmp_path / "data"
+    _write_outc(root / "t1" / "eicu" / "outc.parquet", [1, 2], [0, 1])
+    with pytest.raises(FileNotFoundError, match="require_all_pairs"):
+        discover_single_site_corpora(
+            root,
+            ["t1", "t2"],
+            ["eicu"],
+            require_all_pairs=True,
+        )
+
+
+def test_hierarchical_corpus_union_equals_flat_union(tmp_path: Path):
+    root = tmp_path / "data"
+    for task, offset in [("t1", 0), ("t2", 1000)]:
+        for ds, add in [("eicu", 0), ("miiv", 500)]:
+            stays = list(range(offset + add, offset + add + 40))
+            _write_outc(root / task / ds / "outc.parquet", stays, [i % 2 for i in range(40)])
+
+    corpora = discover_single_site_corpora(root, ["t1", "t2"], ["eicu", "miiv"])
+    flat_u, per_flat = compute_union_holdout(
+        corpora,
+        holdout_fraction=0.2,
+        base_seed=11,
+        group_col="stay_id",
+        label_col="label",
+        stratify=False,
+        balance_by_pool_source=False,
+    )
+    hier = compute_hierarchical_union_holdout(
+        corpora,
+        holdout_fraction=0.2,
+        base_seed=11,
+        group_col="stay_id",
+        label_col="label",
+        stratify=False,
+        balance_by_pool_source=False,
+    )
+    assert hier.corpus_union == flat_u
+    assert hier.per_pair == per_flat
+    # per-dataset = union of task holdouts for that site
+    ue = hier.per_pair["t1::eicu"] | hier.per_pair["t2::eicu"]
+    um = hier.per_pair["t1::miiv"] | hier.per_pair["t2::miiv"]
+    assert hier.per_dataset["eicu"] == ue
+    assert hier.per_dataset["miiv"] == um
 
 
 def test_demo_data_tree_exists():

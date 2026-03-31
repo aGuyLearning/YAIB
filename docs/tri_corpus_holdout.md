@@ -75,6 +75,30 @@ cd /path/to/Bachelor
 PYTHONPATH=YAIB python -m pytest YAIB/tests/test_union_holdout.py -v
 ```
 
+### 2.2 Hierarchical union (task×site → dataset → corpus)
+
+Same **final** stay set as §2.1: holdout per `task::site`, then **union** within each site (`eicu`, `hirid`, `miiv`), then **union** across sites. Mathematically this equals one flat union over all pairs; the manifest adds **`per_dataset`** for auditing.
+
+**Scan layout:** only single-site YAIB dirs `DATA_ROOT/<task>/<dataset>/outc.parquet` (not pooled `eicu_hirid`). For single-site leaves, keep **`balance_by_pool_source` off** unless you know `stay_id` uses pooled suffixes inside that folder—otherwise you can see spurious stratify-skip warnings.
+
+**CLI:** `scripts/data/split_merged_corpus_hierarchical_holdout.py` — `--data-root`, `--tasks` (comma-separated), `--datasets` (default `eicu,hirid,miiv`), optional **`--require-all-pairs`** to fail if any expected `task/dataset` pair is missing `outc.parquet`.
+
+**Repo wrapper (Bachelor root):** `bash sbatches/build_tri_corpus_hierarchical_holdout.sh` — defaults: merged `data/corpus_eicu_hirid_miiv`, output `data/corpus_eicu_hirid_miiv_pretrain_hier`, tasks `aki,mortality24,sepsis,kidney_function` (override `TASKS=...`).
+
+**Manifest:** `hierarchical_union_holdout_manifest.json` (default next to pretrain output) has `kind: hierarchical_union_holdout_pretrain`, full `per_pair` stay lists, and `per_dataset` with `task_pair_keys`, `n_holdout_stays`, and `union_holdout_stay_ids` per site.
+
+```bash
+conda activate yaib
+python scripts/data/split_merged_corpus_hierarchical_holdout.py \
+  --data-root /path/to/Bachelor/data \
+  --tasks aki,mortality24,sepsis,kidney_function \
+  --datasets eicu,hirid,miiv \
+  --merged-input-dir /path/to/data/corpus_eicu_hirid_miiv \
+  --output-pretrain-dir /path/to/data/corpus_eicu_hirid_miiv_pretrain_hier \
+  --holdout-fraction 0.15 \
+  --seed 42
+```
+
 ## 3. Pretrain TS2Vec twice (batching ablation)
 
 Point `-d` at **`tri_pretrain` only**. Keep gin identical except:
@@ -103,4 +127,4 @@ The script requires:
 - Homogeneous batching: `icu_benchmarks/data/batch_samplers.py`, `train_common.homogeneous_dataset_batches` (Pretrain + TS2Vec only)
 - Split implementation: `icu_benchmarks/data/corpus_split.py`
 - Union holdout: `icu_benchmarks/data/union_holdout.py`
-- CLIs: `scripts/data/split_tri_corpus_holdout.py`, `scripts/data/split_merged_corpus_union_holdout.py`
+- CLIs: `scripts/data/split_tri_corpus_holdout.py`, `scripts/data/split_merged_corpus_union_holdout.py`, `scripts/data/split_merged_corpus_hierarchical_holdout.py`

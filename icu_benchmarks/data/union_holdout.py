@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import zlib
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -44,7 +45,7 @@ def pair_seed(task: str, dataset: str, base_seed: int) -> int:
     return int((base_seed + h) % (2**31))
 
 
-def compute_union_holdout(
+def _compute_per_pair_holdouts(
     corpora: Sequence[TaskDatasetCorpus],
     *,
     holdout_fraction: float,
@@ -54,11 +55,9 @@ def compute_union_holdout(
     stratify: bool,
     balance_by_pool_source: bool,
     outcome_basename: str = "outc.parquet",
-) -> tuple[set[int], dict[str, set[int]]]:
-    """Return (union_holdout_stays, per_pair_holdout keyed by pair_key())."""
+) -> dict[str, set[int]]:
+    """Holdout stay sets keyed by task::dataset (pair_key)."""
     per_pair: dict[str, set[int]] = {}
-    union: set[int] = set()
-
     for c in corpora:
         outc_path = Path(c.path) / outcome_basename
         if not outc_path.is_file():
@@ -77,11 +76,127 @@ def compute_union_holdout(
             stratify=stratify,
             balance_by_pool_source=balance_by_pool_source,
         )
-        key = c.pair_key()
-        per_pair[key] = holdout
-        union |= holdout
+        per_pair[c.pair_key()] = holdout
+    return per_pair
 
+
+def compute_union_holdout(
+    corpora: Sequence[TaskDatasetCorpus],
+    *,
+    holdout_fraction: float,
+    base_seed: int,
+    group_col: str,
+    label_col: str,
+    stratify: bool,
+    balance_by_pool_source: bool,
+    outcome_basename: str = "outc.parquet",
+) -> tuple[set[int], dict[str, set[int]]]:
+    """Return (union_holdout_stays, per_pair_holdout keyed by pair_key())."""
+    per_pair = _compute_per_pair_holdouts(
+        corpora,
+        holdout_fraction=holdout_fraction,
+        base_seed=base_seed,
+        group_col=group_col,
+        label_col=label_col,
+        stratify=stratify,
+        balance_by_pool_source=balance_by_pool_source,
+        outcome_basename=outcome_basename,
+    )
+    union: set[int] = set()
+    for s in per_pair.values():
+        union |= s
     return union, per_pair
+
+
+@dataclass(frozen=True)
+class HierarchicalUnionResult:
+    """task×site holdouts, unions per dataset (site), and corpus-level union."""
+
+    corpus_union: set[int]
+    per_pair: dict[str, set[int]]
+    per_dataset: dict[str, set[int]]
+
+
+def discover_single_site_corpora(
+    data_root: Path,
+    tasks: Sequence[str],
+    datasets: Sequence[str],
+    *,
+    require_all_pairs: bool = False,
+    outcome_basename: str = "outc.parquet",
+) -> list[TaskDatasetCorpus]:
+    """Discover ``data_root/<task>/<dataset>/outc.parquet`` for single-site YAIB layouts."""
+    data_root = Path(data_root).resolve()
+    found: list[TaskDatasetCorpus] = []
+    missing: list[str] = []
+    for task in tasks:
+        task = task.strip()
+        if not task:
+            continue
+        for dataset in datasets:
+            dataset = dataset.strip()
+            if not dataset:
+                continue
+            path = data_root / task / dataset
+            outc = path / outcome_basename
+            if outc.is_file():
+                found.append(TaskDatasetCorpus(task=task, dataset=dataset, path=path))
+            else:
+                missing.append(f"{task}/{dataset}")
+    if require_all_pairs and missing:
+        preview = ", ".join(missing[:12])
+        more = f" (+{len(missing) - 12} more)" if len(missing) > 12 else ""
+        raise FileNotFoundError(
+            f"require_all_pairs: missing {outcome_basename} for: {preview}{more}"
+        )
+    if not found:
+        raise FileNotFoundError(
+            f"No corpora found under {data_root} for given tasks×datasets (expected {outcome_basename})"
+        )
+    return found
+
+
+def compute_hierarchical_union_holdout(
+    corpora: Sequence[TaskDatasetCorpus],
+    *,
+    holdout_fraction: float,
+    base_seed: int,
+    group_col: str,
+    label_col: str,
+    stratify: bool,
+    balance_by_pool_source: bool,
+    outcome_basename: str = "outc.parquet",
+) -> HierarchicalUnionResult:
+    """Union holdouts per task×site, then per dataset (site), then full corpus.
+
+    Corpus-level union equals the flat union over all pair holdouts.
+    """
+    per_pair = _compute_per_pair_holdouts(
+        corpora,
+        holdout_fraction=holdout_fraction,
+        base_seed=base_seed,
+        group_col=group_col,
+        label_col=label_col,
+        stratify=stratify,
+        balance_by_pool_source=balance_by_pool_source,
+        outcome_basename=outcome_basename,
+    )
+    per_dataset: dict[str, set[int]] = defaultdict(set)
+    for c in corpora:
+        per_dataset[c.dataset] |= per_pair[c.pair_key()]
+    corpus_union: set[int] = set()
+    for s in per_dataset.values():
+        corpus_union |= s
+    flat_union = set()
+    for s in per_pair.values():
+        flat_union |= s
+    if corpus_union != flat_union:
+        raise RuntimeError("internal error: hierarchical corpus_union != flat union over pairs")
+    return HierarchicalUnionResult(
+        corpus_union=corpus_union,
+        per_pair=dict(per_pair),
+        per_dataset={k: set(v) for k, v in sorted(per_dataset.items())},
+    )
 
 
 def merged_outcome_stays(
@@ -248,6 +363,127 @@ def run_union_holdout_pretrain(
         per_pair_holdout=per_pair,
         merged_stays=merged_stays,
         extra_union_not_in_merged=extra,
+    )
+    manifest_path = Path(manifest_path).resolve()
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, default=str)
+
+    return manifest
+
+
+def build_hierarchical_manifest(
+    *,
+    holdout_fraction: float,
+    base_seed: int,
+    group_col: str,
+    label_col: str,
+    stratify: bool,
+    balance_by_pool_source: bool,
+    outcome_basename: str,
+    hierarchical: HierarchicalUnionResult,
+    merged_stays: set[int],
+    extra_union_not_in_merged: set[int],
+    data_root: str | None = None,
+    tasks_scanned: list[str] | None = None,
+    datasets_scanned: list[str] | None = None,
+) -> dict[str, Any]:
+    per_pair_json: dict[str, Any] = {}
+    for key, hset in sorted(hierarchical.per_pair.items()):
+        per_pair_json[key] = {
+            "holdout_stay_ids": sorted(hset),
+            "n_holdout_stays": len(hset),
+        }
+    per_dataset_json: dict[str, Any] = {}
+    for ds, hset in sorted(hierarchical.per_dataset.items()):
+        task_keys = sorted(k for k in hierarchical.per_pair if k.endswith(f"::{ds}"))
+        per_dataset_json[ds] = {
+            "task_pair_keys": task_keys,
+            "n_holdout_stays": len(hset),
+            "union_holdout_stay_ids": sorted(hset),
+        }
+    out: dict[str, Any] = {
+        "kind": "hierarchical_union_holdout_pretrain",
+        "holdout_fraction": holdout_fraction,
+        "base_seed": base_seed,
+        "group_col": group_col,
+        "label_col": label_col,
+        "stratify": stratify,
+        "balance_by_pool_source": balance_by_pool_source,
+        "outcome_basename": outcome_basename,
+        "n_merged_stays": len(merged_stays),
+        "n_union_holdout_stays": len(hierarchical.corpus_union),
+        "n_union_holdout_in_merged": len(hierarchical.corpus_union & merged_stays),
+        "n_extra_union_not_in_merged": len(extra_union_not_in_merged),
+        "union_holdout_stay_ids": sorted(hierarchical.corpus_union),
+        "per_pair": per_pair_json,
+        "per_dataset": per_dataset_json,
+    }
+    if data_root is not None:
+        out["data_root"] = data_root
+    if tasks_scanned is not None:
+        out["tasks_scanned"] = list(tasks_scanned)
+    if datasets_scanned is not None:
+        out["datasets_scanned"] = list(datasets_scanned)
+    return out
+
+
+def run_hierarchical_union_holdout_pretrain(
+    corpora: Sequence[TaskDatasetCorpus],
+    merged_input_dir: Path,
+    output_pretrain_dir: Path,
+    manifest_path: Path,
+    *,
+    holdout_fraction: float,
+    base_seed: int,
+    group_col: str,
+    label_col: str,
+    stratify: bool,
+    balance_by_pool_source: bool,
+    parquet_names: tuple[str, ...] = DEFAULT_PARQUETS,
+    outcome_basename: str = "outc.parquet",
+    strict: bool = False,
+    data_root: Path | None = None,
+    tasks_scanned: list[str] | None = None,
+    datasets_scanned: list[str] | None = None,
+) -> dict[str, Any]:
+    """Hierarchical union holdout; write pretrain-only merged dir + nested manifest."""
+    hier = compute_hierarchical_union_holdout(
+        corpora,
+        holdout_fraction=holdout_fraction,
+        base_seed=base_seed,
+        group_col=group_col,
+        label_col=label_col,
+        stratify=stratify,
+        balance_by_pool_source=balance_by_pool_source,
+        outcome_basename=outcome_basename,
+    )
+    merged_stays = merged_outcome_stays(merged_input_dir, group_col, outcome_basename)
+    extra = validate_union_against_merged(hier.corpus_union, merged_stays, strict=strict)
+
+    write_pretrain_excluding_stays(
+        merged_input_dir,
+        output_pretrain_dir,
+        hier.corpus_union,
+        group_col=group_col,
+        parquet_names=parquet_names,
+        outcome_basename=outcome_basename,
+    )
+
+    manifest = build_hierarchical_manifest(
+        holdout_fraction=holdout_fraction,
+        base_seed=base_seed,
+        group_col=group_col,
+        label_col=label_col,
+        stratify=stratify,
+        balance_by_pool_source=balance_by_pool_source,
+        outcome_basename=outcome_basename,
+        hierarchical=hier,
+        merged_stays=merged_stays,
+        extra_union_not_in_merged=extra,
+        data_root=str(data_root.resolve()) if data_root is not None else None,
+        tasks_scanned=tasks_scanned,
+        datasets_scanned=datasets_scanned,
     )
     manifest_path = Path(manifest_path).resolve()
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
