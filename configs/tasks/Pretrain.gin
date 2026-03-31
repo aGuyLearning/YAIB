@@ -11,6 +11,8 @@ include "configs/tasks/common/CrossValidation.gin"
 Run.mode = "Pretrain"
 train_common.weight = ""
 train_common.ram_cache = True
+# Pooled multi-source only: single-source batches for TS2Vec (see TS2Vec.gin to enable).
+train_common.homogeneous_dataset_batches = False
 
 # SELECTING PREPROCESSOR
 preprocess.preprocessor = @base_classification_preprocessor

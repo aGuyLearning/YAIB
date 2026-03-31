@@ -15,6 +15,7 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader
 
 from icu_benchmarks.constants import RunMode
+from icu_benchmarks.data.batch_samplers import HomogeneousSourceBatchSampler
 from icu_benchmarks.data.constants import DataSplit as DataSplit
 from icu_benchmarks.data.loader import (
     ImputationPandasDataset,
@@ -22,7 +23,7 @@ from icu_benchmarks.data.loader import (
     PredictionPolarsDataset,
     PretrainPolarsDataset,
 )
-from icu_benchmarks.models import DLModel, MLModelClassifier, MLModelRegression
+from icu_benchmarks.models import DLModel, MLModelClassifier, MLModelRegression, TS2Vec
 from icu_benchmarks.models.utils import JSONMetricsLogger, save_config_file
 
 cpu_core_count = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
@@ -33,6 +34,13 @@ def assure_minimum_length(dataset: pl.DataFrame) -> pl.DataFrame:
     if len(dataset) < 2:
         return pl.concat([dataset, dataset])
     return dataset
+
+
+def _homogeneous_ts2vec_pretrain_batches(homogeneous_dataset_batches: bool, mode: str, model_cls: object) -> bool:
+    """True only when flag is on, task is Pretrain, and model class is TS2Vec."""
+    if not homogeneous_dataset_batches:
+        return False
+    return mode == RunMode.pretrain and isinstance(model_cls, type) and issubclass(model_cls, TS2Vec)
 
 
 @gin.configurable("train_common")
@@ -63,6 +71,7 @@ def train_common(
     num_workers: int = min(cpu_core_count, torch.cuda.device_count() * 8 * int(torch.cuda.is_available()), 32),
     polars: bool = True,
     persistent_workers: bool = False,
+    homogeneous_dataset_batches: bool = False,
 ):
     """Common wrapper to train all benchmarked models.
 
@@ -89,9 +98,18 @@ def train_common(
         ram_cache: Whether to cache the data in RAM.
         pl_model: Loading a pytorch lightning model.
         num_workers: Number of workers to use for data loading.
+        homogeneous_dataset_batches: If True, use per-source homogeneous batches for TS2Vec pretrain only;
+            ignored for any other mode or model (a warning is logged when True but unsupported).
     """
     if dataset_names is None:
         dataset_names = {}
+
+    use_homogeneous_batches = _homogeneous_ts2vec_pretrain_batches(homogeneous_dataset_batches, mode, model)
+    if homogeneous_dataset_batches and not use_homogeneous_batches:
+        logging.warning(
+            "train_common.homogeneous_dataset_batches=True is only supported for RunMode.pretrain with TS2Vec; "
+            "using standard batching."
+        )
 
     logging.info(f"Training model: {model.__name__}.")
     # TODO: add support for polars versions of datasets
@@ -117,22 +135,41 @@ def train_common(
             f" {len(val_dataset)} samples."
         )
     logging.info(f"Using {num_workers} workers for data loading.")
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        drop_last=True,
-        persistent_workers=persistent_workers,
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        drop_last=True,
-        persistent_workers=persistent_workers,
-    )
+    if use_homogeneous_batches and model.requires_backprop:
+        logging.info("Using homogeneous-dataset batching (TS2Vec pretrain).")
+        train_loader = DataLoader(
+            train_dataset,
+            batch_sampler=HomogeneousSourceBatchSampler(
+                train_dataset, batch_size, drop_last=True, shuffle=True
+            ),
+            num_workers=num_workers,
+            persistent_workers=persistent_workers,
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_sampler=HomogeneousSourceBatchSampler(
+                val_dataset, batch_size, drop_last=True, shuffle=False
+            ),
+            num_workers=num_workers,
+            persistent_workers=persistent_workers,
+        )
+    else:
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            drop_last=True,
+            persistent_workers=persistent_workers,
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            drop_last=True,
+            persistent_workers=persistent_workers,
+        )
 
     first_batch = next(iter(train_loader))
     if mode == RunMode.pretrain:

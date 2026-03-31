@@ -19,6 +19,8 @@ train_common.patience = 8
 train_common.min_delta = 1e-4
 train_common.weight = ""
 train_common.train_only = True
+# Pooled corpora: set True for single-dataset-per-batch TS2Vec pretrain (Pretrain task only).
+train_common.homogeneous_dataset_batches = False
 
 # Larger encoder / projector for higher input dimension (generate_features=True)
 TS2Vec.hidden_dim = 256
