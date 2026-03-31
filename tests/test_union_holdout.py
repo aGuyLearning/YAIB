@@ -13,6 +13,11 @@ _YAIB_ROOT = Path(__file__).resolve().parents[1]
 if str(_YAIB_ROOT) not in sys.path:
     sys.path.insert(0, str(_YAIB_ROOT))
 
+from icu_benchmarks.data.pooled_stay_id import (
+    apply_pooled_stay_id_suffix,
+    pooled_index_map_from_merge_order,
+    pooled_suffix_digits,
+)
 from icu_benchmarks.data.union_holdout import (
     TaskDatasetCorpus,
     compute_hierarchical_union_holdout,
@@ -21,6 +26,7 @@ from icu_benchmarks.data.union_holdout import (
     merged_outcome_stays,
     run_union_holdout_pretrain,
     validate_union_against_merged,
+    write_merged_holdout_subset,
     write_pretrain_excluding_stays,
 )
 
@@ -201,6 +207,46 @@ def test_single_stay_pair_yields_empty_holdout_union(tmp_path: Path):
     assert pl.read_parquet(out_pt / "outc.parquet").height == 3
 
 
+def test_run_union_holdout_writes_holdout_corpus_and_manifest(tmp_path: Path):
+    pair = tmp_path / "pair"
+    merged_stays_list = list(range(1, 21))
+    _write_outc(pair / "outc.parquet", merged_stays_list[:12], [i % 2 for i in range(12)])
+    merged = tmp_path / "merged"
+    _write_outc(merged / "outc.parquet", merged_stays_list)
+    _write_dyn(merged / "dyn.parquet", merged_stays_list)
+    pre = tmp_path / "pretrain"
+    hold = tmp_path / "holdout"
+    mpath = tmp_path / "union_manifest.json"
+    run_union_holdout_pretrain(
+        [TaskDatasetCorpus("aki", "eicu", pair)],
+        merged,
+        pre,
+        mpath,
+        holdout_fraction=0.2,
+        base_seed=99,
+        group_col="stay_id",
+        label_col="label",
+        stratify=False,
+        balance_by_pool_source=False,
+        strict=True,
+        output_holdout_dir=hold,
+    )
+    pt_ids = set(pl.read_parquet(pre / "outc.parquet")["stay_id"].to_list())
+    ho_ids = set(pl.read_parquet(hold / "outc.parquet")["stay_id"].to_list())
+    assert not (pt_ids & ho_ids)
+    assert pt_ids | ho_ids == set(merged_stays_list)
+    assert (hold / mpath.name).is_file()
+
+
+def test_write_merged_holdout_subset_intersection(tmp_path: Path):
+    merged = tmp_path / "merged"
+    _write_outc(merged / "outc.parquet", [1, 2, 3, 4])
+    _write_dyn(merged / "dyn.parquet", [1, 2, 3, 4])
+    out_h = tmp_path / "ho"
+    write_merged_holdout_subset(merged, out_h, {2, 3, 99}, group_col="stay_id", parquet_names=("outc.parquet", "dyn.parquet"))
+    assert set(pl.read_parquet(out_h / "outc.parquet")["stay_id"].to_list()) == {2, 3}
+
+
 def test_run_union_holdout_writes_manifest(tmp_path: Path):
     pair = tmp_path / "pair"
     _write_outc(pair / "outc.parquet", list(range(1, 25)), [i % 2 for i in range(24)])
@@ -252,6 +298,72 @@ def test_discover_single_site_corpora_require_all_raises(tmp_path: Path):
             ["eicu"],
             require_all_pairs=True,
         )
+
+
+def test_pooled_suffix_helpers_match_merge_pooled_corpora():
+    assert pooled_suffix_digits(0) == "1111"
+    assert pooled_suffix_digits(2) == "3333"
+    assert apply_pooled_stay_id_suffix(100, 0) == int("100" + "1111")
+    assert apply_pooled_stay_id_suffix(5, 1) == int("5" + "2222")
+    m = pooled_index_map_from_merge_order(["eicu", "hirid", "miiv"])
+    assert m == {"eicu": 0, "hirid": 1, "miiv": 2}
+
+
+def test_pooled_index_map_duplicate_slug_raises():
+    with pytest.raises(ValueError, match="Duplicate"):
+        pooled_index_map_from_merge_order(["eicu", "eicu"])
+
+
+def test_pooled_remap_matches_manual_apply_per_stay(tmp_path: Path):
+    pair = tmp_path / "p"
+    stays = list(range(100, 120))
+    _write_outc(pair / "outc.parquet", stays, [i % 2 for i in range(20)])
+    corpora = [TaskDatasetCorpus("t", "eicu", pair)]
+    kwargs = dict(
+        holdout_fraction=0.25,
+        base_seed=3,
+        group_col="stay_id",
+        label_col="label",
+        stratify=False,
+        balance_by_pool_source=False,
+    )
+    raw_u, raw_p = compute_union_holdout(corpora, **kwargs, pooled_index_for_dataset=None)
+    pmap = pooled_index_map_from_merge_order(["eicu"])
+    u2, p2 = compute_union_holdout(corpora, **kwargs, pooled_index_for_dataset=pmap)
+    assert u2 == {apply_pooled_stay_id_suffix(s, 0) for s in raw_u}
+    assert p2["t::eicu"] == {apply_pooled_stay_id_suffix(s, 0) for s in raw_p["t::eicu"]}
+
+
+def test_dataset_missing_from_pooled_map_raises(tmp_path: Path):
+    pair = tmp_path / "p"
+    _write_outc(pair / "outc.parquet", [1, 2, 3, 4], [0, 1, 0, 1])
+    with pytest.raises(ValueError, match="not in pooled merge-order map"):
+        compute_union_holdout(
+            [TaskDatasetCorpus("t", "miiv", pair)],
+            holdout_fraction=0.25,
+            base_seed=0,
+            group_col="stay_id",
+            label_col="label",
+            stratify=False,
+            balance_by_pool_source=False,
+            pooled_index_for_dataset={"eicu": 0},
+        )
+
+
+def test_write_pretrain_excludes_suffixed_stay_id(tmp_path: Path):
+    merged = tmp_path / "merged"
+    sid = apply_pooled_stay_id_suffix(42, 0)
+    _write_outc(merged / "outc.parquet", [sid])
+    _write_dyn(merged / "dyn.parquet", [sid])
+    out_pt = tmp_path / "out"
+    write_pretrain_excluding_stays(
+        merged,
+        out_pt,
+        {sid},
+        group_col="stay_id",
+        parquet_names=("outc.parquet", "dyn.parquet"),
+    )
+    assert pl.read_parquet(out_pt / "outc.parquet").height == 0
 
 
 def test_hierarchical_corpus_union_equals_flat_union(tmp_path: Path):

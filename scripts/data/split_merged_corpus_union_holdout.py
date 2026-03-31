@@ -20,6 +20,7 @@ if str(_YAIB_ROOT) not in sys.path:
     sys.path.insert(0, str(_YAIB_ROOT))
 
 from icu_benchmarks.data.corpus_split import DEFAULT_PARQUETS
+from icu_benchmarks.data.pooled_stay_id import pooled_index_map_from_merge_order
 from icu_benchmarks.data.union_holdout import (
     corpora_from_json,
     parse_pair_arg,
@@ -34,6 +35,13 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--merged-input-dir", type=Path, required=True, help="Merged corpus (outc/dyn/sta parquets)")
     p.add_argument("--output-pretrain-dir", type=Path, required=True)
+    p.add_argument(
+        "--output-holdout-dir",
+        type=Path,
+        default=None,
+        help="Optional: write merged rows for union holdout stays only (for probe -d); "
+        "also writes a copy of the manifest here",
+    )
     p.add_argument(
         "--manifest-path",
         type=Path,
@@ -71,6 +79,18 @@ def main() -> int:
         action="store_true",
         help="Fail if any pair holdout stay id is missing from merged outcome",
     )
+    p.add_argument(
+        "--pooled-merge-order",
+        type=str,
+        default=None,
+        help="If set (comma slugs), remap leaf holdout stay_ids to merged pooled space; "
+        "each pair's dataset field must appear in this order list.",
+    )
+    p.add_argument(
+        "--no-pooled-stay-id-suffix",
+        action="store_true",
+        help="Disable suffix remap even if --pooled-merge-order is set",
+    )
     args = p.parse_args()
 
     if not 0 < args.holdout_fraction < 1:
@@ -88,6 +108,19 @@ def main() -> int:
     manifest_path = args.manifest_path or (args.output_pretrain_dir / "union_holdout_manifest.json")
     stratify = not args.no_stratify
 
+    pooled_order: list[str] | None = None
+    pooled_map: dict[str, int] | None = None
+    if not args.no_pooled_stay_id_suffix and args.pooled_merge_order:
+        pooled_order = [x.strip() for x in args.pooled_merge_order.split(",") if x.strip()]
+        if not pooled_order:
+            p.error("--pooled-merge-order must list at least one slug when set")
+        pooled_map = pooled_index_map_from_merge_order(pooled_order)
+        for c in corpora:
+            if c.dataset not in pooled_map:
+                p.error(
+                    f"Pair {c.pair_key()}: dataset slug {c.dataset!r} not in --pooled-merge-order"
+                )
+
     manifest = run_union_holdout_pretrain(
         corpora,
         args.merged_input_dir,
@@ -102,6 +135,9 @@ def main() -> int:
         parquet_names=names,
         outcome_basename=args.outcome_basename,
         strict=args.strict,
+        pooled_index_for_dataset=pooled_map,
+        pooled_merge_order=pooled_order,
+        output_holdout_dir=args.output_holdout_dir,
     )
     logger.info(
         "Wrote pretrain corpus excluding %d union holdout stays (merged had %d stays); manifest %s",
@@ -109,6 +145,8 @@ def main() -> int:
         manifest["n_merged_stays"],
         manifest_path,
     )
+    if args.output_holdout_dir is not None:
+        logger.info("Wrote holdout-only merged corpus under %s", args.output_holdout_dir)
     return 0
 
 

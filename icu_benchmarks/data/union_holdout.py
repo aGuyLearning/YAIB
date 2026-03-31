@@ -23,6 +23,7 @@ from icu_benchmarks.data.corpus_split import (
     split_stays_pretrain_holdout,
     validate_segment_stays_subset,
 )
+from icu_benchmarks.data.pooled_stay_id import apply_pooled_stay_id_suffix
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +56,13 @@ def _compute_per_pair_holdouts(
     stratify: bool,
     balance_by_pool_source: bool,
     outcome_basename: str = "outc.parquet",
+    pooled_index_for_dataset: dict[str, int] | None = None,
 ) -> dict[str, set[int]]:
-    """Holdout stay sets keyed by task::dataset (pair_key)."""
+    """Holdout stay sets keyed by task::dataset (pair_key).
+
+    If ``pooled_index_for_dataset`` is set, each pair's ``dataset`` slug must appear as a key;
+    holdout IDs are remapped with ``apply_pooled_stay_id_suffix`` to match merged pooled parquets.
+    """
     per_pair: dict[str, set[int]] = {}
     for c in corpora:
         outc_path = Path(c.path) / outcome_basename
@@ -76,6 +82,14 @@ def _compute_per_pair_holdouts(
             stratify=stratify,
             balance_by_pool_source=balance_by_pool_source,
         )
+        if pooled_index_for_dataset is not None:
+            if c.dataset not in pooled_index_for_dataset:
+                raise ValueError(
+                    f"{c.pair_key()}: dataset slug {c.dataset!r} not in pooled merge-order map "
+                    f"(keys: {sorted(pooled_index_for_dataset.keys())})"
+                )
+            idx = pooled_index_for_dataset[c.dataset]
+            holdout = {apply_pooled_stay_id_suffix(sid, idx) for sid in holdout}
         per_pair[c.pair_key()] = holdout
     return per_pair
 
@@ -90,6 +104,7 @@ def compute_union_holdout(
     stratify: bool,
     balance_by_pool_source: bool,
     outcome_basename: str = "outc.parquet",
+    pooled_index_for_dataset: dict[str, int] | None = None,
 ) -> tuple[set[int], dict[str, set[int]]]:
     """Return (union_holdout_stays, per_pair_holdout keyed by pair_key())."""
     per_pair = _compute_per_pair_holdouts(
@@ -101,6 +116,7 @@ def compute_union_holdout(
         stratify=stratify,
         balance_by_pool_source=balance_by_pool_source,
         outcome_basename=outcome_basename,
+        pooled_index_for_dataset=pooled_index_for_dataset,
     )
     union: set[int] = set()
     for s in per_pair.values():
@@ -166,6 +182,7 @@ def compute_hierarchical_union_holdout(
     stratify: bool,
     balance_by_pool_source: bool,
     outcome_basename: str = "outc.parquet",
+    pooled_index_for_dataset: dict[str, int] | None = None,
 ) -> HierarchicalUnionResult:
     """Union holdouts per task×site, then per dataset (site), then full corpus.
 
@@ -180,6 +197,7 @@ def compute_hierarchical_union_holdout(
         stratify=stratify,
         balance_by_pool_source=balance_by_pool_source,
         outcome_basename=outcome_basename,
+        pooled_index_for_dataset=pooled_index_for_dataset,
     )
     per_dataset: dict[str, set[int]] = defaultdict(set)
     for c in corpora:
@@ -244,6 +262,8 @@ def build_union_manifest(
     per_pair_holdout: dict[str, set[int]],
     merged_stays: set[int],
     extra_union_not_in_merged: set[int],
+    pooled_stay_id_suffix_applied: bool = False,
+    pooled_merge_order: list[str] | None = None,
 ) -> dict[str, Any]:
     per_pair_json: dict[str, Any] = {}
     for key, hset in sorted(per_pair_holdout.items()):
@@ -251,7 +271,7 @@ def build_union_manifest(
             "holdout_stay_ids": sorted(hset),
             "n_holdout_stays": len(hset),
         }
-    return {
+    out: dict[str, Any] = {
         "kind": "union_holdout_pretrain",
         "holdout_fraction": holdout_fraction,
         "base_seed": base_seed,
@@ -267,6 +287,12 @@ def build_union_manifest(
         "union_holdout_stay_ids": sorted(union_holdout),
         "per_pair": per_pair_json,
     }
+    if pooled_stay_id_suffix_applied:
+        out["pooled_stay_id_suffix_applied"] = True
+        out["note_holdout_ids"] = "stay_id values match merged pooled parquets (suffix applied)"
+    if pooled_merge_order:
+        out["pooled_merge_order"] = list(pooled_merge_order)
+    return out
 
 
 def write_pretrain_excluding_stays(
@@ -312,6 +338,48 @@ def write_pretrain_excluding_stays(
     return counts
 
 
+def write_merged_holdout_subset(
+    merged_input_dir: Path,
+    output_holdout_dir: Path,
+    holdout_stays: set[int],
+    *,
+    group_col: str,
+    parquet_names: tuple[str, ...] = DEFAULT_PARQUETS,
+    outcome_basename: str = "outc.parquet",
+) -> dict[str, int]:
+    """Write parquets containing only rows whose ``group_col`` is in ``holdout_stays`` ∩ merged outcome stays."""
+    merged_input_dir = Path(merged_input_dir).resolve()
+    outc_path = merged_input_dir / outcome_basename
+    if not outc_path.is_file():
+        raise FileNotFoundError(f"Outcome parquet not found: {outc_path}")
+
+    outcome = pl.read_parquet(outc_path)
+    if group_col not in outcome.columns:
+        raise ValueError(f"group_col {group_col!r} missing from merged outcome")
+
+    all_stays = {int(x) for x in outcome[group_col].unique().to_list()}
+    stays_to_write = holdout_stays & all_stays
+    if not stays_to_write:
+        logger.warning("No holdout stays intersect merged outcome; holdout parquets may be empty.")
+
+    files = discover_parquet_files(merged_input_dir, parquet_names)
+    if not files:
+        raise FileNotFoundError(f"No parquet files from {parquet_names} found in {merged_input_dir}")
+
+    for base, path in files:
+        if base != outcome_basename:
+            validate_segment_stays_subset(path, group_col, all_stays, base)
+
+    output_holdout_dir = Path(output_holdout_dir).resolve()
+    output_holdout_dir.mkdir(parents=True, exist_ok=True)
+
+    counts: dict[str, int] = {}
+    for base, path in files:
+        counts[base] = filter_parquet_to_stays(path, group_col, stays_to_write, output_holdout_dir / base)
+
+    return counts
+
+
 def run_union_holdout_pretrain(
     corpora: Sequence[TaskDatasetCorpus],
     merged_input_dir: Path,
@@ -327,6 +395,9 @@ def run_union_holdout_pretrain(
     parquet_names: tuple[str, ...] = DEFAULT_PARQUETS,
     outcome_basename: str = "outc.parquet",
     strict: bool = False,
+    pooled_index_for_dataset: dict[str, int] | None = None,
+    pooled_merge_order: list[str] | None = None,
+    output_holdout_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Compute union holdout from pair corpora; write pretrain-only merged dir + manifest."""
     union_h, per_pair = compute_union_holdout(
@@ -338,6 +409,7 @@ def run_union_holdout_pretrain(
         stratify=stratify,
         balance_by_pool_source=balance_by_pool_source,
         outcome_basename=outcome_basename,
+        pooled_index_for_dataset=pooled_index_for_dataset,
     )
     merged_stays = merged_outcome_stays(merged_input_dir, group_col, outcome_basename)
     extra = validate_union_against_merged(union_h, merged_stays, strict=strict)
@@ -351,6 +423,17 @@ def run_union_holdout_pretrain(
         outcome_basename=outcome_basename,
     )
 
+    if output_holdout_dir is not None:
+        write_merged_holdout_subset(
+            merged_input_dir,
+            output_holdout_dir,
+            union_h,
+            group_col=group_col,
+            parquet_names=parquet_names,
+            outcome_basename=outcome_basename,
+        )
+
+    suffix_on = pooled_index_for_dataset is not None
     manifest = build_union_manifest(
         holdout_fraction=holdout_fraction,
         base_seed=base_seed,
@@ -363,11 +446,19 @@ def run_union_holdout_pretrain(
         per_pair_holdout=per_pair,
         merged_stays=merged_stays,
         extra_union_not_in_merged=extra,
+        pooled_stay_id_suffix_applied=suffix_on,
+        pooled_merge_order=pooled_merge_order,
     )
     manifest_path = Path(manifest_path).resolve()
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, default=str)
+
+    if output_holdout_dir is not None:
+        hod = Path(output_holdout_dir).resolve()
+        hod.mkdir(parents=True, exist_ok=True)
+        with open(hod / manifest_path.name, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2, default=str)
 
     return manifest
 
@@ -387,6 +478,8 @@ def build_hierarchical_manifest(
     data_root: str | None = None,
     tasks_scanned: list[str] | None = None,
     datasets_scanned: list[str] | None = None,
+    pooled_stay_id_suffix_applied: bool = False,
+    pooled_merge_order: list[str] | None = None,
 ) -> dict[str, Any]:
     per_pair_json: dict[str, Any] = {}
     for key, hset in sorted(hierarchical.per_pair.items()):
@@ -425,6 +518,11 @@ def build_hierarchical_manifest(
         out["tasks_scanned"] = list(tasks_scanned)
     if datasets_scanned is not None:
         out["datasets_scanned"] = list(datasets_scanned)
+    if pooled_stay_id_suffix_applied:
+        out["pooled_stay_id_suffix_applied"] = True
+        out["note_holdout_ids"] = "stay_id values match merged pooled parquets (suffix applied)"
+    if pooled_merge_order:
+        out["pooled_merge_order"] = list(pooled_merge_order)
     return out
 
 
@@ -446,6 +544,9 @@ def run_hierarchical_union_holdout_pretrain(
     data_root: Path | None = None,
     tasks_scanned: list[str] | None = None,
     datasets_scanned: list[str] | None = None,
+    pooled_index_for_dataset: dict[str, int] | None = None,
+    pooled_merge_order: list[str] | None = None,
+    output_holdout_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Hierarchical union holdout; write pretrain-only merged dir + nested manifest."""
     hier = compute_hierarchical_union_holdout(
@@ -457,6 +558,7 @@ def run_hierarchical_union_holdout_pretrain(
         stratify=stratify,
         balance_by_pool_source=balance_by_pool_source,
         outcome_basename=outcome_basename,
+        pooled_index_for_dataset=pooled_index_for_dataset,
     )
     merged_stays = merged_outcome_stays(merged_input_dir, group_col, outcome_basename)
     extra = validate_union_against_merged(hier.corpus_union, merged_stays, strict=strict)
@@ -470,6 +572,17 @@ def run_hierarchical_union_holdout_pretrain(
         outcome_basename=outcome_basename,
     )
 
+    if output_holdout_dir is not None:
+        write_merged_holdout_subset(
+            merged_input_dir,
+            output_holdout_dir,
+            hier.corpus_union,
+            group_col=group_col,
+            parquet_names=parquet_names,
+            outcome_basename=outcome_basename,
+        )
+
+    suffix_on = pooled_index_for_dataset is not None
     manifest = build_hierarchical_manifest(
         holdout_fraction=holdout_fraction,
         base_seed=base_seed,
@@ -484,11 +597,19 @@ def run_hierarchical_union_holdout_pretrain(
         data_root=str(data_root.resolve()) if data_root is not None else None,
         tasks_scanned=tasks_scanned,
         datasets_scanned=datasets_scanned,
+        pooled_stay_id_suffix_applied=suffix_on,
+        pooled_merge_order=pooled_merge_order,
     )
     manifest_path = Path(manifest_path).resolve()
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, default=str)
+
+    if output_holdout_dir is not None:
+        hod = Path(output_holdout_dir).resolve()
+        hod.mkdir(parents=True, exist_ok=True)
+        with open(hod / manifest_path.name, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2, default=str)
 
     return manifest
 

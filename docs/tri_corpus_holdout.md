@@ -59,6 +59,10 @@ python scripts/data/split_merged_corpus_union_holdout.py \
 
 Or pass `--pairs-json /path/to/pairs.json` with a list of `{"task", "dataset", "path"}` objects (each `path` is a directory containing `outc.parquet`).
 
+**Pooled `stay_id` suffix:** If leaf `outc` files use **local** IDs but the merged corpus was built with [`merge_pooled_corpora.py`](../../merge_pooled_corpora.py), pass **`--pooled-merge-order`** with the same site slug order as `--corpus-dirs` (e.g. `eicu,hirid,miiv`). Each pair’s `dataset` field must match a slug in that list. Omit this flag (and do not pass `--no-pooled-stay-id-suffix`) only when holdout IDs already match merged rows. **`--no-pooled-stay-id-suffix`** disables remapping.
+
+**Holdout dir for probes:** **`--output-holdout-dir`** writes merged `dyn`/`sta`/`outc` (same basenames as input) **restricted to union holdout stays** (intersected with merged outcome), plus a copy of the manifest. Use that directory as **`-d`** for TS2VecProbe when running on the global holdout pool in **merged** `stay_id` space.
+
 **`union_holdout_manifest.json`** (written next to the pretrain output by default) includes:
 
 - `union_holdout_stay_ids`: sorted union used for exclusion.
@@ -81,9 +85,11 @@ Same **final** stay set as §2.1: holdout per `task::site`, then **union** withi
 
 **Scan layout:** only single-site YAIB dirs `DATA_ROOT/<task>/<dataset>/outc.parquet` (not pooled `eicu_hirid`). For single-site leaves, keep **`balance_by_pool_source` off** unless you know `stay_id` uses pooled suffixes inside that folder—otherwise you can see spurious stratify-skip warnings.
 
+**Pooled `stay_id` suffix (default on):** By default the hierarchical CLI remaps leaf holdout IDs with the same rule as `merge_pooled_corpora` (`--pooled-merge-order` default `eicu,hirid,miiv` for the usual tri build). The manifest includes `pooled_stay_id_suffix_applied` and `pooled_merge_order`. Use **`--no-pooled-stay-id-suffix`** if your leaf parquets already use suffixed IDs. If your merge used a different `--corpus-dirs` order, set `--pooled-merge-order` to match.
+
 **CLI:** `scripts/data/split_merged_corpus_hierarchical_holdout.py` — `--data-root`, `--tasks` (comma-separated), `--datasets` (default `eicu,hirid,miiv`), optional **`--require-all-pairs`** to fail if any expected `task/dataset` pair is missing `outc.parquet`.
 
-**Repo wrapper (Bachelor root):** `bash sbatches/build_tri_corpus_hierarchical_holdout.sh` — defaults: merged `data/corpus_eicu_hirid_miiv`, output `data/corpus_eicu_hirid_miiv_pretrain_hier`, tasks `aki,mortality24,sepsis,kidney_function` (override `TASKS=...`).
+**Repo wrapper (Bachelor root):** `bash sbatches/build_tri_corpus_hierarchical_holdout.sh` — defaults: merged `data/corpus_eicu_hirid_miiv`, pretrain `data/corpus_eicu_hirid_miiv_pretrain_hier`, holdout `data/corpus_eicu_hirid_miiv_holdout_hier` (set **`NO_HOLDOUT=1`** to skip the holdout directory).
 
 **Manifest:** `hierarchical_union_holdout_manifest.json` (default next to pretrain output) has `kind: hierarchical_union_holdout_pretrain`, full `per_pair` stay lists, and `per_dataset` with `task_pair_keys`, `n_holdout_stays`, and `union_holdout_stay_ids` per site.
 
@@ -95,6 +101,7 @@ python scripts/data/split_merged_corpus_hierarchical_holdout.py \
   --datasets eicu,hirid,miiv \
   --merged-input-dir /path/to/data/corpus_eicu_hirid_miiv \
   --output-pretrain-dir /path/to/data/corpus_eicu_hirid_miiv_pretrain_hier \
+  --output-holdout-dir /path/to/data/corpus_eicu_hirid_miiv_holdout_hier \
   --holdout-fraction 0.15 \
   --seed 42
 ```
@@ -110,7 +117,7 @@ Use the same seed, epochs, and model gin (e.g. `configs/prediction_models/TS2Vec
 
 ## 4. Train probes on the holdout with CV
 
-Point `-d` at **`tri_holdout` only**. Use a classification (or regression) task gin with **`TS2VecProbe`** and set `TS2VecProbe.pretrained_encoder_path` to each pretrain checkpoint in turn. Use normal repeated CV (`configs/tasks/common/CrossValidation.gin`).
+Point `-d` at the **holdout** data directory: either **`tri_holdout`** from `split_tri_corpus_holdout.py` (§2) or **`--output-holdout-dir`** from the union / hierarchical scripts (§2.1–2.2), which carries merged `stay_id`s. Use a classification (or regression) task gin with **`TS2VecProbe`** and set `TS2VecProbe.pretrained_encoder_path` to each pretrain checkpoint in turn. Use normal repeated CV (`configs/tasks/common/CrossValidation.gin`).
 
 See `scripts/sample_usage/transfer/ts2vec_kickoff.py` for patterns that inject `TS2VecProbe.pretrained_encoder_path` and match preprocessor settings to pretrain.
 
@@ -126,5 +133,5 @@ The script requires:
 - Pooling: `icu_benchmarks/data/pooling.py`
 - Homogeneous batching: `icu_benchmarks/data/batch_samplers.py`, `train_common.homogeneous_dataset_batches` (Pretrain + TS2Vec only)
 - Split implementation: `icu_benchmarks/data/corpus_split.py`
-- Union holdout: `icu_benchmarks/data/union_holdout.py`
+- Union holdout: `icu_benchmarks/data/union_holdout.py`, `icu_benchmarks/data/pooled_stay_id.py`
 - CLIs: `scripts/data/split_tri_corpus_holdout.py`, `scripts/data/split_merged_corpus_union_holdout.py`, `scripts/data/split_merged_corpus_hierarchical_holdout.py`
