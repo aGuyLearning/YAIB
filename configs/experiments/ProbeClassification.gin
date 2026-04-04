@@ -3,4 +3,7 @@
 # Aligns dynamic-only inputs with Pretrain.gin (preprocess.use_static = False).
 include "configs/prediction_models/TS2VecProbe.gin"
 
+preprocess.preprocessor = @raw_ts2vec_preprocessor
 preprocess.use_static = False
+raw_ts2vec_preprocessor.use_static_features = False
+raw_ts2vec_preprocessor.strict_outcome_alignment = False

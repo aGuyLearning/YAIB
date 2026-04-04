@@ -5,15 +5,16 @@ import gin.torch.external_configurables
 import icu_benchmarks.models.wrappers
 import icu_benchmarks.models.dl_models.ts2vec
 
-# Match downstream data pipeline (historical aggregates); clear preprocessor caches if toggling.
-base_classification_preprocessor.generate_features = True
+# Use raw dynamics + missingness rather than hand-crafted historical summaries.
+# Clear preprocessor caches after toggling this.
+base_classification_preprocessor.generate_features = False
 
 # Core train params
 train_common.model = @TS2Vec
 train_common.optimizer = @Adam
 Adam.lr = 3e-4
 Adam.weight_decay = 1e-5
-train_common.epochs = 80
+train_common.epochs = 120
 train_common.batch_size = 128
 train_common.patience = 8
 train_common.min_delta = 1e-4
@@ -22,10 +23,11 @@ train_common.train_only = True
 # Pooled corpora: set True for single-dataset-per-batch TS2Vec pretrain (Pretrain task only).
 train_common.homogeneous_dataset_batches = False
 
-# Larger encoder / projector for higher input dimension (generate_features=True)
-TS2Vec.hidden_dim = 256
-TS2Vec.projection_dim = 512
-TS2Vec.encoder_layers = 8
+# Keep the encoder small enough that it must learn from trajectories, not just
+# memorize engineered summary channels.
+TS2Vec.hidden_dim = 128
+TS2Vec.projection_dim = 128
+TS2Vec.encoder_layers = 4
 TS2Vec.dropout = 0.1
 TS2Vec.aug_noise_std = 0.05
 TS2Vec.temperature = 0.07

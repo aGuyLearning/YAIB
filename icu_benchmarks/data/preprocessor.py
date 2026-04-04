@@ -66,6 +66,7 @@ class Preprocessor(ABC):
         self.save_cache = save_cache
         self.load_cache = load_cache
         self.vars_to_exclude = vars_to_exclude
+        self.preserve_missing_values = False
 
     @abstractmethod
     def apply(self, data, vars):
@@ -263,6 +264,109 @@ class PolarsClassificationPreprocessor(Preprocessor):
             super().to_cache_string()
             + f"_classification_{self.generate_features}_{self.scaling}_{self.imputation_model.__class__.__name__}"
         )
+
+
+@gin.configurable("raw_ts2vec_preprocessor")
+class PolarsRawTS2VecPreprocessor(Preprocessor):
+    """Minimal dynamic-only preprocessing for TS2Vec.
+
+    Keeps raw trajectories and per-feature missingness intact so the model can
+    consume zero-filled values together with an explicit observation mask.
+    """
+
+    def __init__(
+        self,
+        scaling: bool = True,
+        use_static_features: bool = False,
+        strict_outcome_alignment: bool = False,
+        save_cache: Optional[Union[str, Path]] = None,
+        load_cache: Optional[Union[str, Path]] = None,
+        vars_to_exclude: Optional[list[str]] = None,
+    ):
+        super().__init__(
+            generate_features=False,
+            scaling=scaling,
+            use_static_features=use_static_features,
+            save_cache=save_cache,
+            load_cache=load_cache,
+            vars_to_exclude=vars_to_exclude,
+        )
+        self.strict_outcome_alignment = strict_outcome_alignment
+        self.preserve_missing_values = True
+
+    def apply(
+        self,
+        data: dict[str, dict[str, pl.DataFrame]],
+        vars: dict[str, Union[str, list[str]]],
+    ) -> dict[str, dict[str, pl.DataFrame]]:
+        if all(DataSegment.dynamic in value for value in data.values()):
+            data = self._process_dynamic(data, vars)
+            for split in [DataSplit.train, DataSplit.val, DataSplit.test]:
+                data[split][DataSegment.features] = data[split].pop(DataSegment.dynamic).unique(
+                    maintain_order=True
+                )
+        elif self.use_static_features and all(DataSegment.static in value for value in data.values()):
+            for split in [DataSplit.train, DataSplit.val, DataSplit.test]:
+                data[split][DataSegment.features] = data[split].pop(DataSegment.static).unique(maintain_order=True)
+        else:
+            raise Exception(f"No recognized data segments to preprocess. Available: {data.keys()}")
+
+        if not isinstance(vars["SEQUENCE"], str):
+            raise TypeError(f'Expected key "SEQUENCE" to be of type str, got {type(vars["SEQUENCE"])} instead')
+
+        if self.strict_outcome_alignment:
+            for split in [DataSplit.train, DataSplit.val, DataSplit.test]:
+                if vars["SEQUENCE"] in data[split][DataSegment.outcome] and len(data[split][DataSegment.features]) != len(
+                    data[split][DataSegment.outcome]
+                ):
+                    raise Exception(
+                        f"Data and outcome length mismatch in {split} split: "
+                        f"features: {len(data[split][DataSegment.features])}, outcome: {len(data[split][DataSegment.outcome])}"
+                    )
+        return data
+
+    def _process_dynamic(self, data: dict[str, dict[str, pl.DataFrame]], vars: dict[str, Union[str, list[str]]]):
+        if not self.scaling:
+            return data
+        dynamic_vars = list(vars[DataSegment.dynamic])
+        train_dyn = data[DataSplit.train][DataSegment.dynamic]
+
+        stat_exprs: list[pl.Expr] = []
+        for col in dynamic_vars:
+            stat_exprs.append(
+                pl.col(col)
+                .filter(pl.col(col).is_not_null() & pl.col(col).is_finite())
+                .mean()
+                .alias(f"{col}__mean")
+            )
+            stat_exprs.append(
+                pl.col(col)
+                .filter(pl.col(col).is_not_null() & pl.col(col).is_finite())
+                .std()
+                .alias(f"{col}__std")
+            )
+        stats = train_dyn.select(stat_exprs).to_dicts()[0]
+
+        def _scale_split(frame: pl.DataFrame) -> pl.DataFrame:
+            exprs: list[pl.Expr] = []
+            for col in dynamic_vars:
+                mean = stats.get(f"{col}__mean")
+                std = stats.get(f"{col}__std")
+                if mean is None:
+                    exprs.append(pl.col(col).cast(pl.Float32).alias(col))
+                    continue
+                if std is None or std == 0:
+                    exprs.append((pl.col(col) - pl.lit(float(mean))).cast(pl.Float32).alias(col))
+                else:
+                    exprs.append(((pl.col(col) - pl.lit(float(mean))) / pl.lit(float(std))).cast(pl.Float32).alias(col))
+            return frame.with_columns(exprs)
+
+        for split in [DataSplit.train, DataSplit.val, DataSplit.test]:
+            data[split][DataSegment.dynamic] = _scale_split(data[split][DataSegment.dynamic])
+        return data
+
+    def to_cache_string(self):
+        return super().to_cache_string() + f"_raw_ts2vec_{self.scaling}_{self.use_static_features}"
 
 
 @gin.configurable("base_regression_preprocessor")

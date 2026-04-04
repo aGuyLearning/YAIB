@@ -9,6 +9,7 @@ class DataSegment:
     dynamic = "DYNAMIC"
     outcome = "OUTCOME"  # Labels
     features = "FEATURES"  # Combined features from static and dynamic data.
+    time_mask = "TIME_MASK"  # Sidecar valid-time mask aligned to dynamic rows.
 
 
 class VarType:

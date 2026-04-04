@@ -42,11 +42,15 @@ class CommonPolarsDataset(Dataset):
             self.features_df = data[split][DataSegment.features]
             self.features_df = self.features_df.sort([self.vars["GROUP"], self.vars["SEQUENCE"]])
             self.features_df = self.features_df.drop(self.vars["SEQUENCE"])
+            self.time_mask_df = None
+            if DataSegment.time_mask in data[split]:
+                self.time_mask_df = data[split][DataSegment.time_mask].sort([self.vars["GROUP"], self.vars["SEQUENCE"]])
         else:
             # We have a static dataset
             logging.info("Using static dataset")
             self.row_indicators = data[split][DataSegment.features][self.vars["GROUP"]]
             self.features_df = data[split][DataSegment.features]
+            self.time_mask_df = None
         # calculate basic info for the data
         self.num_stays = self.grouping_df[self.vars["GROUP"]].unique().shape[0]
         self.maxlen = self.features_df.group_by([self.vars["GROUP"]]).len().max().item(0, 1)
@@ -183,14 +187,14 @@ class PredictionPolarsDataset(CommonPolarsDataset):
 class PretrainPolarsDataset(CommonPolarsDataset):
     """Dataset for self-supervised sequence pretraining.
 
-    Returns only feature windows (no labels) grouped by stay_id.
+    Returns feature windows with a valid-timestep mask grouped by stay_id.
     """
 
     def __init__(self, *args, ram_cache: bool = True, **kwargs):
         super().__init__(*args, **kwargs)
         self.ram_cache(ram_cache)
 
-    def __getitem__(self, idx: int) -> Tensor:
+    def __getitem__(self, idx: int) -> tuple[Tensor, Tensor]:
         if self._cached_dataset is not None:
             return self._cached_dataset[idx]
 
@@ -201,9 +205,20 @@ class PretrainPolarsDataset(CommonPolarsDataset):
         )
 
         length_diff = self.maxlen - window.shape[0]
+        if self.time_mask_df is not None:
+            pad_mask = (
+                self.time_mask_df.filter(pl.col(self.vars["GROUP"]) == stay_id)
+                .select("valid_time")
+                .to_numpy()
+                .reshape(-1)
+                .astype(bool)
+            )
+        else:
+            pad_mask = np.ones(window.shape[0], dtype=bool)
         if length_diff > 0:
             window = np.concatenate([window, np.ones((length_diff, window.shape[1])) * pad_value], axis=0)
-        return from_numpy(window.astype(np.float32))
+            pad_mask = np.concatenate([pad_mask, np.zeros(length_diff, dtype=bool)], axis=0)
+        return from_numpy(window.astype(np.float32)), from_numpy(pad_mask)
 
 
 @gin.configurable("CommonPandasDataset")

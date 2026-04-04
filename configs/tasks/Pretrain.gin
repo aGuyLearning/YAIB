@@ -15,12 +15,13 @@ train_common.ram_cache = True
 train_common.homogeneous_dataset_batches = False
 
 # SELECTING PREPROCESSOR
-preprocess.preprocessor = @base_classification_preprocessor
+preprocess.preprocessor = @raw_ts2vec_preprocessor
 preprocess.vars = %vars
 preprocess.use_static = False
 preprocess.required_var_types = ["GROUP", "SEQUENCE"]
 preprocess.required_segments = ["DYNAMIC", "OUTCOME"]
-base_classification_preprocessor.strict_outcome_alignment = False
+raw_ts2vec_preprocessor.strict_outcome_alignment = False
+raw_ts2vec_preprocessor.use_static_features = False
 
 # SELECTING DATASET
 include "configs/tasks/common/Dataloader.gin"

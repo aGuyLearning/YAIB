@@ -156,6 +156,9 @@ def preprocess_data(
     data: dict[str, pl.DataFrame] = {
         f: pl.read_parquet(data_dir / file_names[f]) for f in file_names.keys() if os.path.exists(data_dir / file_names[f])
     }
+    sidecar_mask = data_dir / "valid_mask.parquet"
+    if sidecar_mask.exists():
+        data[DataSegment.time_mask] = pl.read_parquet(sidecar_mask)
 
     logging.info(f"Loaded data: {list(data.keys())}")
     sanitized_data = check_sanitize_data(data, vars)
@@ -196,6 +199,7 @@ def preprocess_data(
     end = timer()
     logging.info(f"Preprocessing took {end - start:.2f} seconds.")
     logging.info(f"Checking for NaNs and nulls in {data.keys()}.")
+    preserve_missing_values = getattr(preprocessor_instance, "preserve_missing_values", False)
     for _dict in sanitized_data.values():
         for key, val in _dict.items():
             logging.debug(f"Data type: {key}")
@@ -205,8 +209,10 @@ def preprocess_data(
             logging.debug("Has nulls:")
             sel = _dict[key].select(pl.all().has_nulls())
             logging.debug(sel.select(col.name for col in sel if col.item(0)))
+            if preserve_missing_values and key in {DataSegment.features, DataSegment.dynamic}:
+                continue
             _dict[key] = val.fill_null(strategy="zero")
-            _dict[key] = val.fill_nan(0)
+            _dict[key] = _dict[key].fill_nan(0)
             logging.debug("Dropping columns with nulls")
             sel = _dict[key].select(pl.all().has_nulls())
             logging.debug(sel.select(col.name for col in sel if col.item(0)))
