@@ -21,7 +21,7 @@ from icu_benchmarks.cross_validation import execute_repeated_cv  # noqa: F401
 from icu_benchmarks.data.constants import DataSegment, DataSplit
 from icu_benchmarks.data.loader import PretrainPolarsDataset
 from icu_benchmarks.data.split_process_data import preprocess_data
-from icu_benchmarks.models.dl_models.ts2vec import TS2Vec
+from icu_benchmarks.models.dl_models.ts2vec import TS2Vec, masked_mean_pool
 from icu_benchmarks.run import get_mode  # noqa: F401
 
 matplotlib.use("Agg")
@@ -60,13 +60,15 @@ def parse_configs(yaib_root: Path) -> None:
 def extract_representations(data: dict, ckpt_path: Path) -> tuple[np.ndarray, list[str], np.ndarray]:
     dataset = PretrainPolarsDataset(data, split=DataSplit.train, ram_cache=True)
     stay_ids = dataset.grouping_df["stay_id"].unique().to_list()
-    windows = torch.stack([dataset[i] for i in range(len(dataset))], dim=0).float()
+    items = [dataset[i] for i in range(len(dataset))]
+    windows = torch.stack([item[0] for item in items], dim=0).float()
+    masks = torch.stack([item[1] for item in items], dim=0).bool()
     windows = torch.nan_to_num(windows, nan=0.0, posinf=0.0, neginf=0.0)
 
     model = TS2Vec.load_from_checkpoint(str(ckpt_path), map_location="cpu", weights_only=False)
     model.eval()
     with torch.no_grad():
-        reps = model.encode(windows).mean(dim=1).cpu().numpy()
+        reps = masked_mean_pool(model.encode(windows), masks).cpu().numpy()
 
     labels_df = data[DataSplit.train][DataSegment.outcome]
     labels_map = (
