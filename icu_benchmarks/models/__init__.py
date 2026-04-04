@@ -5,7 +5,11 @@ from icu_benchmarks.models.dl_models.tcn import TemporalConvNet
 from icu_benchmarks.models.dl_models.ts2vec import TS2Vec, TS2VecProbe
 from icu_benchmarks.models.dl_models.transformer import BaseTransformer, LocalTransformer, Transformer
 from icu_benchmarks.models.ml_models.catboost import CBClassifier
-from icu_benchmarks.models.ml_models.imblearn import BRFClassifier, RUSBClassifier
+try:
+    from icu_benchmarks.models.ml_models.imblearn import BRFClassifier, RUSBClassifier
+except ImportError:
+    BRFClassifier = None  # type: ignore[assignment,misc]
+    RUSBClassifier = None  # type: ignore[assignment,misc]
 from icu_benchmarks.models.ml_models.lgbm import LGBMClassifier, LGBMRegressor
 from icu_benchmarks.models.ml_models.sklearn import (
     ElasticNet,
@@ -34,8 +38,6 @@ DLModel = Union[
 MLModelClassifier = Union[
     XGBClassifier,
     LGBMClassifier,
-    RUSBClassifier,
-    BRFClassifier,
     CBClassifier,
     LogisticRegression,
     SVMClassifier,
@@ -62,8 +64,6 @@ __all__ = [
     "Transformer",
     "LocalTransformer",
     "CBClassifier",
-    "RUSBClassifier",
-    "BRFClassifier",
     "LGBMClassifier",
     "LGBMRegressor",
     "XGBClassifier",
@@ -76,4 +76,5 @@ __all__ = [
     "MLPRegressor",
     "MLPClassifier",
     "PerceptronClassifier",
+    *([n for n in ["RUSBClassifier", "BRFClassifier"] if globals().get(n) is not None]),
 ]

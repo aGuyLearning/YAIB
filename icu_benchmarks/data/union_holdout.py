@@ -28,6 +28,7 @@ from icu_benchmarks.data.pooled_stay_id import apply_pooled_stay_id_suffix
 logger = logging.getLogger(__name__)
 
 # Task folder names (data_root/<task>/...) with continuous regression outcomes.
+# Slug "los" matches YAIB/demo_data/los/ (length-of-stay regression).
 # Classification-style label stratification (sklearn) is inappropriate and differs from
 # YAIB regression CV (no stratify on label). Align holdout with that behavior.
 REGRESSION_HOLDOUT_TASK_SLUGS: frozenset[str] = frozenset({"los", "kidney_function"})

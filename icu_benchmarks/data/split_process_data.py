@@ -97,8 +97,8 @@ def preprocess_data(
     check_required_keys(file_names, required_segments)
 
     if not use_static:
-        file_names.pop(DataSegment.static)
-        vars.pop(DataSegment.static)
+        file_names.pop(DataSegment.static, None)
+        vars.pop(DataSegment.static, None)
 
     if VarType.label in vars:
         if isinstance(vars[VarType.label], list) and len(vars[VarType.label]) > 1:

@@ -178,7 +178,9 @@ def train_common(
         data_shape = first_batch[0].shape
 
     if load_weights:
-        model: DLModel | MLModelClassifier | MLModelRegression = load_model(model, source_dir, pl_model=pl_model)
+        model: DLModel | MLModelClassifier | MLModelRegression = load_model(
+            model, source_dir, pl_model=pl_model, input_size=data_shape
+        )
     else:
         model: DLModel | MLModelClassifier | MLModelRegression = model(
             optimizer=optimizer, input_size=data_shape, epochs=epochs, run_mode=mode, cpu=cpu
@@ -282,7 +284,7 @@ def persist_shap_data(trainer: Trainer, log_dir: Path):
         logging.error(f"Failed to save shap values: {e}")
 
 
-def load_model(model, source_dir, pl_model=True) -> DLModel | MLModelClassifier | MLModelRegression:
+def load_model(model, source_dir, pl_model=True, input_size=None) -> DLModel | MLModelClassifier | MLModelRegression:
     if source_dir.exists():
         if model.requires_backprop:
             if (source_dir / "model.ckpt").exists():
@@ -294,7 +296,12 @@ def load_model(model, source_dir, pl_model=True) -> DLModel | MLModelClassifier 
             else:
                 raise Exception(f"No weights to load at path : {source_dir}")
             if pl_model:
-                model = model.load_from_checkpoint(model_path, map_location="cpu", weights_only=False)
+                # Pass input_size to override the None stored in checkpoint hyper_parameters.
+                # BaseTransformer (and similar) needs the actual feature dimension to build
+                # nn.Linear layers; it is not saved correctly because the parent wrapper's
+                # save_hyperparameters() runs after BaseTransformer has already consumed it.
+                extra = {"input_size": input_size} if input_size is not None else {}
+                model = model.load_from_checkpoint(model_path, map_location="cpu", weights_only=False, **extra)
             else:
                 checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
                 model.load_from_checkpoint(checkpoint)
