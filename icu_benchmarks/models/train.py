@@ -36,6 +36,23 @@ def assure_minimum_length(dataset: pl.DataFrame) -> pl.DataFrame:
     return dataset
 
 
+def _infer_input_shape_from_batch(batch):
+    """Extract the model input tensor shape from a dataloader batch.
+
+    Pretraining loaders may now return tuples like ``(x, time_mask)`` while
+    supervised loaders return ``(x, y, mask)``. The model input shape is always
+    defined by the first tensor-like element.
+    """
+
+    if hasattr(batch, "shape"):
+        return batch.shape
+    if isinstance(batch, (list, tuple)) and len(batch) > 0:
+        first = batch[0]
+        if hasattr(first, "shape"):
+            return first.shape
+    raise TypeError(f"Could not infer input shape from batch of type {type(batch)}")
+
+
 def _homogeneous_ts2vec_pretrain_batches(homogeneous_dataset_batches: bool, mode: str, model_cls: object) -> bool:
     """True only when flag is on, task is Pretrain, and model class is TS2Vec."""
     if not homogeneous_dataset_batches:
@@ -172,10 +189,7 @@ def train_common(
         )
 
     first_batch = next(iter(train_loader))
-    if mode == RunMode.pretrain:
-        data_shape = first_batch.shape
-    else:
-        data_shape = first_batch[0].shape
+    data_shape = _infer_input_shape_from_batch(first_batch)
 
     if load_weights:
         model: DLModel | MLModelClassifier | MLModelRegression = load_model(

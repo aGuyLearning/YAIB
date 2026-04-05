@@ -14,6 +14,10 @@ Produce a single folder containing at least `outc.parquet`, `dyn.parquet`, and o
 
 ## 2. Split into pretrain and holdout
 
+The simple merged-corpus split below is now a legacy fallback. The recommended
+repo workflow is the hierarchical task×site union holdout in §2.2 because it
+matches probe-usable stays per task and preserves all merged-corpus sidecars.
+
 Use the **`yaib`** conda environment (or any env with `polars`, `scikit-learn`, and YAIB deps such as `torch`). From the YAIB repo root:
 
 ```bash
@@ -91,7 +95,7 @@ Same **final** stay set as §2.1: holdout per `task::site`, then **union** withi
 
 **CLI:** `scripts/data/split_merged_corpus_hierarchical_holdout.py` — `--data-root`, `--tasks` (comma-separated), `--datasets` (default `eicu,hirid,miiv`), optional **`--require-all-pairs`** to fail if any expected `task/dataset` pair is missing `outc.parquet`.
 
-**Repo wrapper (Bachelor root):** `bash sbatches/build_tri_corpus_hierarchical_holdout.sh` — defaults: merged `data/corpus_eicu_hirid_miiv`, pretrain `data/corpus_eicu_hirid_miiv_pretrain`, holdout `data/corpus_eicu_hirid_miiv_holdout` (override with `OUT_PRETRAIN` / `OUT_HOLDOUT`; set **`NO_HOLDOUT=1`** to skip the holdout directory).
+**Repo wrapper (Bachelor root):** `bash sbatches/split_tri_corpus_holdout.sh` now delegates to `bash sbatches/build_tri_corpus_hierarchical_holdout.sh` and is the default tri-corpus holdout entrypoint. Defaults: merged `data/corpus_eicu_hirid_miiv`, pretrain `data/corpus_eicu_hirid_miiv_pretrain`, holdout `data/corpus_eicu_hirid_miiv_holdout` (override with `OUT_PRETRAIN` / `OUT_HOLDOUT`; set **`NO_HOLDOUT=1`** to skip the holdout directory).
 
 **Manifest:** `hierarchical_union_holdout_manifest.json` (default next to pretrain output) has `kind: hierarchical_union_holdout_pretrain`, full `per_pair` stay lists, and `per_dataset` with `task_pair_keys`, `n_holdout_stays`, and `union_holdout_stay_ids` per site.
 
@@ -119,7 +123,7 @@ Use the same seed, epochs, and model gin (e.g. `configs/prediction_models/TS2Vec
 
 ## 4. Train probes on the holdout with CV
 
-Point `-d` at the **holdout** data directory: either **`tri_holdout`** from `split_tri_corpus_holdout.py` (§2) or **`--output-holdout-dir`** from the union / hierarchical scripts (§2.1–2.2), which carries merged `stay_id`s. Use a classification (or regression) task gin with **`TS2VecProbe`** and set `TS2VecProbe.pretrained_encoder_path` to each pretrain checkpoint in turn. Use normal repeated CV (`configs/tasks/common/CrossValidation.gin`).
+Point `-d` at the **holdout** data directory from the hierarchical wrapper or the `--output-holdout-dir` of the union / hierarchical scripts (§2.1–2.2), which carries merged `stay_id`s and preserves masks/labels sidecars. Use a classification (or regression) task gin with **`TS2VecProbe`** and set `TS2VecProbe.pretrained_encoder_path` to each pretrain checkpoint in turn. Use normal repeated CV (`configs/tasks/common/CrossValidation.gin`).
 
 See `scripts/sample_usage/transfer/ts2vec_kickoff.py` for patterns that inject `TS2VecProbe.pretrained_encoder_path` and match preprocessor settings to pretrain.
 
@@ -136,4 +140,4 @@ The script requires:
 - Homogeneous batching: `icu_benchmarks/data/batch_samplers.py`, `train_common.homogeneous_dataset_batches` (Pretrain + TS2Vec only)
 - Split implementation: `icu_benchmarks/data/corpus_split.py`
 - Union holdout: `icu_benchmarks/data/union_holdout.py`, `icu_benchmarks/data/pooled_stay_id.py`
-- CLIs: `scripts/data/split_tri_corpus_holdout.py`, `scripts/data/split_merged_corpus_union_holdout.py`, `scripts/data/split_merged_corpus_hierarchical_holdout.py`
+- CLIs: `scripts/data/split_tri_corpus_holdout.py` (legacy simple split), `scripts/data/split_merged_corpus_union_holdout.py`, `scripts/data/split_merged_corpus_hierarchical_holdout.py`

@@ -24,6 +24,15 @@ from icu_benchmarks.data.preprocessor import (
 from .constants import DataSegment, DataSplit, VarType
 
 
+def cache_writes_enabled() -> bool:
+    """Global kill switch for YAIB cache writes.
+
+    Default is disabled so existing runs stop generating new cache files without
+    needing CLI changes. Set ``YAIB_ENABLE_CACHE_WRITES=1`` to re-enable.
+    """
+    return os.environ.get("YAIB_ENABLE_CACHE_WRITES", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
 @gin.configurable("preprocess")
 def preprocess_data(
     data_dir: Path,
@@ -78,6 +87,13 @@ def preprocess_data(
         Preprocessed data as DataFrame in a hierarchical dict with features type (STATIC) / DYNAMIC/ OUTCOME
             nested within split (train/val/test).
     """
+    if generate_cache and not cache_writes_enabled():
+        logging.info(
+            "generate_cache=True requested, but cache writes are globally disabled "
+            "(set YAIB_ENABLE_CACHE_WRITES=1 to re-enable)."
+        )
+        generate_cache = False
+
     if modality_mapping is None:
         modality_mapping = {}
     if selected_modalities is None:

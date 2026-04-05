@@ -19,7 +19,6 @@ _YAIB_ROOT = Path(__file__).resolve().parents[2]
 if str(_YAIB_ROOT) not in sys.path:
     sys.path.insert(0, str(_YAIB_ROOT))
 
-from icu_benchmarks.data.corpus_split import DEFAULT_PARQUETS
 from icu_benchmarks.data.pooled_stay_id import pooled_index_map_from_merge_order
 from icu_benchmarks.data.union_holdout import (
     corpora_from_json,
@@ -70,8 +69,11 @@ def main() -> int:
     p.add_argument(
         "--parquet-names",
         type=str,
-        default=",".join(DEFAULT_PARQUETS),
-        help="Comma-separated basenames to copy (only existing files are used)",
+        default="",
+        help=(
+            "Comma-separated basenames to copy. Default: all *.parquet files in the merged corpus "
+            "directory, including valid/task masks and labels sidecars."
+        ),
     )
     p.add_argument("--outcome-basename", type=str, default="outc.parquet")
     p.add_argument(
