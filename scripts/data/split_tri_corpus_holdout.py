@@ -16,7 +16,7 @@ _YAIB_ROOT = Path(__file__).resolve().parents[2]
 if str(_YAIB_ROOT) not in sys.path:
     sys.path.insert(0, str(_YAIB_ROOT))
 
-from icu_benchmarks.data.corpus_split import DEFAULT_PARQUETS, run_corpus_split
+from icu_benchmarks.data.corpus_split import run_corpus_split
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -44,8 +44,11 @@ def main() -> int:
     p.add_argument(
         "--parquet-names",
         type=str,
-        default=",".join(DEFAULT_PARQUETS),
-        help="Comma-separated basenames to copy (only existing files are used)",
+        default="",
+        help=(
+            "Comma-separated basenames to copy. Default: all *.parquet files in the input "
+            "corpus directory, including valid/task masks and labels sidecars."
+        ),
     )
     p.add_argument("--outcome-basename", type=str, default="outc.parquet")
     args = p.parse_args()

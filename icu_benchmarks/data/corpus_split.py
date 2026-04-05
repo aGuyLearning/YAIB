@@ -149,6 +149,11 @@ def filter_parquet_to_stays(path: Path, group_col: str, stays: set[int], output_
 
 def discover_parquet_files(input_dir: Path, names: tuple[str, ...]) -> list[tuple[str, Path]]:
     """Return list of (basename, path) for files that exist under input_dir."""
+    if not names:
+        return sorted(
+            ((p.name, p) for p in input_dir.glob("*.parquet") if p.is_file()),
+            key=lambda item: item[0],
+        )
     found: list[tuple[str, Path]] = []
     for name in names:
         p = input_dir / name
