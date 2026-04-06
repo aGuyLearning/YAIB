@@ -8,7 +8,7 @@ import numpy as np
 import polars as pl
 import torch
 from joblib import load
-from pytorch_lightning import Trainer
+from pytorch_lightning import Callback, Trainer
 from pytorch_lightning.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint, TQDMProgressBar
 from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
 from torch.optim import Adam
@@ -32,6 +32,21 @@ from icu_benchmarks.models.utils import JSONMetricsLogger, save_config_file
 
 cpu_core_count = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
 cpu_core_count = 1 if not cpu_core_count else cpu_core_count  #  os.cpu_count possibly None
+
+
+class PeriodicEpochCheckpoint(Callback):
+    def __init__(self, dirpath: Path, every_n_epochs: int) -> None:
+        super().__init__()
+        if every_n_epochs < 1:
+            raise ValueError("every_n_epochs must be >= 1")
+        self.dirpath = Path(dirpath)
+        self.every_n_epochs = every_n_epochs
+
+    def on_train_epoch_end(self, trainer: Trainer, pl_module: torch.nn.Module) -> None:
+        completed_epochs = trainer.current_epoch + 1
+        if completed_epochs % self.every_n_epochs != 0:
+            return
+        trainer.save_checkpoint(str(self.dirpath / f"periodic-after-epoch-{completed_epochs:03d}.ckpt"))
 
 
 def assure_minimum_length(dataset: pl.DataFrame) -> pl.DataFrame:
@@ -91,6 +106,7 @@ def train_common(
     max_steps: int = -1,
     patience: int = 20,
     min_delta: float = 1e-5,
+    checkpoint_every_n_epochs: int = 0,
     test_on: str = DataSplit.test,
     dataset_names: Optional[dict] = None,
     use_wandb: bool = False,
@@ -125,6 +141,7 @@ def train_common(
         max_steps: Optional optimizer-step cap. If > 0, Lightning stops training after this many steps.
         patience: Number of epochs to wait for improvement before early stopping.
         min_delta: Minimum change in loss to be considered an improvement.
+        checkpoint_every_n_epochs: If > 0, save an additional unmonitored checkpoint every N epochs.
         test_on: If set to "test", evaluate the model on the test set. If set to "val", evaluate on the validation set.
         use_wandb: If set to true, log to wandb.
         cpu: If set to true, run on cpu.
@@ -307,6 +324,9 @@ def train_common(
         ModelCheckpoint(log_dir, filename="model", monitor="val/loss", mode="min", save_top_k=1, save_last=True),
         LearningRateMonitor(logging_interval="step"),
     ]
+    if model.requires_backprop and checkpoint_every_n_epochs > 0:
+        callbacks.append(PeriodicEpochCheckpoint(log_dir, checkpoint_every_n_epochs))
+        logging.info("Saving periodic checkpoints every %d epochs.", checkpoint_every_n_epochs)
     if use_stochastic_batches:
         logging.info("TS2Vec stochastic pretrain uses fixed-budget training with best-val checkpoint selection.")
     else:

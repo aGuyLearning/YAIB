@@ -199,7 +199,7 @@ class PretrainPolarsDataset(CommonPolarsDataset):
             return self._cached_dataset[idx]
 
         pad_value = 0.0
-        stay_id = self.grouping_df[self.vars["GROUP"]].unique()[idx]
+        stay_id = self.grouping_df[self.vars["GROUP"]].unique(maintain_order=True)[idx]
         window = (
             self.features_df.filter(pl.col(self.vars["GROUP"]) == stay_id).select(pl.exclude(self.vars["GROUP"])).to_numpy()
         )

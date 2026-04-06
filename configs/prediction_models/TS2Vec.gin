@@ -16,17 +16,16 @@ Adam.lr = 3e-4
 Adam.weight_decay = 1e-5
 train_common.epochs = 100
 train_common.batch_size = 32
-train_common.max_steps = 30000
-train_common.ts2vec_stochastic_batches = True
+train_common.max_steps = -1
+train_common.ts2vec_stochastic_batches = False
+# Only used if train_common.ts2vec_stochastic_batches is explicitly re-enabled.
 train_common.ts2vec_val_check_interval_steps = 5000
-# Stochastic TS2Vec uses fixed-budget training plus best-val checkpoint selection;
-# patience only applies if stochastic batching is disabled.
+train_common.checkpoint_every_n_epochs = 10
 train_common.patience = 8
 train_common.min_delta = 1e-4
 train_common.weight = ""
 train_common.train_only = True
-# Pooled corpora: set True for single-source TS2Vec batches. With stochastic
-# batches enabled, source buckets are sampled proportionally to source size.
+# Pooled corpora: set True for finite single-source TS2Vec batches.
 train_common.homogeneous_dataset_batches = False
 
 # Keep the encoder small enough that it must learn from trajectories, not just
@@ -35,7 +34,7 @@ TS2Vec.hidden_dim = 128
 TS2Vec.encoder_layers = 4
 TS2Vec.dropout = 0.1
 TS2Vec.mask_mode = "binomial"
-# PyPOTS/official TS2Vec-style hierarchical contrastive loss.
+# PyPOTS-core TS2Vec owns crop sampling, masking, and hierarchical contrastive loss.
 TS2Vec.loss_alpha = 0.5
 TS2Vec.temporal_unit = 0
 # For very long corpora, pass e.g. -hp TS2Vec.max_crop_len=128 to bound

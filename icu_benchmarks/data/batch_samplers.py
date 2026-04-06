@@ -44,7 +44,7 @@ class HomogeneousSourceBatchSampler(Sampler[List[int]]):
         self.drop_last = drop_last
         self.shuffle = shuffle
         group_col = dataset.vars["GROUP"]
-        stay_ids = dataset.grouping_df[group_col].unique().to_list()
+        stay_ids = dataset.grouping_df[group_col].unique(maintain_order=True).to_list()
         self._length = len(stay_ids)
         by_source: dict[int, list[int]] = defaultdict(list)
         for i, sid in enumerate(stay_ids):
@@ -128,7 +128,7 @@ class HomogeneousSourceReplacementBatchSampler(Sampler[List[int]]):
         self.batch_size = batch_size
         self.num_batches = num_batches
         group_col = dataset.vars["GROUP"]
-        stay_ids = dataset.grouping_df[group_col].unique().to_list()
+        stay_ids = dataset.grouping_df[group_col].unique(maintain_order=True).to_list()
         by_source: dict[int, list[int]] = defaultdict(list)
         for i, sid in enumerate(stay_ids):
             by_source[pool_source_id_from_stay_id(int(sid))].append(i)

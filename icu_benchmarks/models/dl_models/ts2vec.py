@@ -4,7 +4,8 @@ from pathlib import Path
 import gin
 import torch
 import torchmetrics
-import torch.nn.functional as F
+from pypots.nn.modules.ts2vec import TS2VecEncoder
+from pypots.representation.ts2vec.core import _TS2Vec
 from torch import Tensor
 from torch import nn as nn
 
@@ -26,6 +27,7 @@ def masked_mean_pool(encoded: Tensor, mask: Tensor | None = None) -> Tensor:
     """Pool encoder outputs over valid timesteps only."""
 
     time_mask = _coerce_time_mask(mask, encoded)
+    encoded = encoded.masked_fill(~time_mask.unsqueeze(-1), 0.0)
     weights = time_mask.unsqueeze(-1).to(encoded.dtype)
     denom = weights.sum(dim=1).clamp_min(1.0)
     return (encoded * weights).sum(dim=1) / denom
@@ -43,77 +45,6 @@ def prepare_ts2vec_inputs(x: Tensor, use_observation_mask: bool = True) -> Tenso
     if not use_observation_mask:
         return values
     return torch.cat([values, observed.to(values.dtype)], dim=-1)
-
-
-class SamePadConv1d(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, dilation: int = 1):
-        super().__init__()
-        receptive_field = (kernel_size - 1) * dilation + 1
-        padding = receptive_field // 2
-        self.trim = 1 if receptive_field % 2 == 0 else 0
-        self.conv = nn.Conv1d(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=kernel_size,
-            dilation=dilation,
-            padding=padding,
-        )
-
-    def forward(self, x: Tensor) -> Tensor:
-        out = self.conv(x)
-        if self.trim:
-            out = out[..., :-self.trim]
-        return out
-
-
-class ResidualDilatedBlock(nn.Module):
-    def __init__(self, channels: int, hidden_dim: int, kernel_size: int, dilation: int, dropout: float):
-        super().__init__()
-        self.block = nn.Sequential(
-            SamePadConv1d(channels, hidden_dim, kernel_size=kernel_size, dilation=dilation),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            SamePadConv1d(hidden_dim, hidden_dim, kernel_size=kernel_size, dilation=dilation),
-            nn.GELU(),
-            nn.Dropout(dropout),
-        )
-        self.project = nn.Identity() if channels == hidden_dim else nn.Conv1d(channels, hidden_dim, kernel_size=1)
-
-    def forward(self, x: Tensor) -> Tensor:
-        return self.block(x) + self.project(x)
-
-
-class DilatedConvEncoder(nn.Module):
-    def __init__(
-        self,
-        in_features: int,
-        hidden_dim: int,
-        layers: int,
-        dropout: float,
-        kernel_size: int = 3,
-    ):
-        super().__init__()
-        blocks = []
-        current_dim = in_features
-        for idx in range(max(1, layers)):
-            blocks.append(
-                ResidualDilatedBlock(
-                    channels=current_dim,
-                    hidden_dim=hidden_dim,
-                    kernel_size=kernel_size,
-                    dilation=2**idx,
-                    dropout=dropout,
-                )
-            )
-            current_dim = hidden_dim
-        self.blocks = nn.ModuleList(blocks)
-
-    def forward(self, x: Tensor) -> Tensor:
-        # [B, T, F] -> [B, F, T]
-        out = x.transpose(1, 2)
-        for block in self.blocks:
-            out = block(out)
-        return out.transpose(1, 2)
 
 
 @gin.configurable
@@ -137,20 +68,25 @@ class TS2Vec(DLWrapper):
         *args,
         **kwargs,
     ):
-        super().__init__(*args, input_size=input_size, **kwargs)
+        kwargs.pop("loss", None)
+        super().__init__(*args, input_size=input_size, loss=None, **kwargs)
         if max_crop_len is not None and max_crop_len < 2:
             raise ValueError("max_crop_len must be >= 2 when set")
         if not 0 <= loss_alpha <= 1:
             raise ValueError("loss_alpha must be between 0 and 1")
         if temporal_unit < 0:
             raise ValueError("temporal_unit must be >= 0")
+        if loss_alpha != 0.5:
+            logging.warning("PyPOTS _TS2Vec uses loss alpha 0.5 internally; ignoring TS2Vec.loss_alpha=%s.", loss_alpha)
         valid_mask_modes = {"binomial", "continuous", "all_true", "all_false", "mask_last"}
         if mask_mode not in valid_mask_modes:
             raise ValueError(f"mask_mode must be one of {sorted(valid_mask_modes)}, got {mask_mode!r}")
         in_features = input_size[2]
         encoder_in_features = in_features * 2 if use_observation_mask else in_features
         self.input_feature_dim = in_features
+        self.encoder_input_feature_dim = encoder_in_features
         self.hidden_dim = hidden_dim
+        self.output_dim = hidden_dim
         self.encoder_layers = encoder_layers
         self.dropout = dropout
         self.kernel_size = kernel_size
@@ -160,26 +96,39 @@ class TS2Vec(DLWrapper):
         self.mask_mode = mask_mode
         self.use_observation_mask = use_observation_mask
 
-        self.encoder = DilatedConvEncoder(
-            in_features=encoder_in_features,
-            hidden_dim=hidden_dim,
-            layers=encoder_layers,
-            dropout=dropout,
-            kernel_size=kernel_size,
+        self.pypots_core = _TS2Vec(
+            n_steps=input_size[1],
+            n_features=encoder_in_features,
+            n_pred_features=hidden_dim,
+            d_hidden=hidden_dim,
+            n_layers=encoder_layers,
+            mask_mode=mask_mode,
+            temporal_unit=temporal_unit,
         )
+
+    @property
+    def encoder(self):
+        return self.pypots_core.encoder
+
+    @encoder.setter
+    def encoder(self, value):
+        self.pypots_core.encoder = value
 
     def on_save_checkpoint(self, checkpoint):
         checkpoint["ts2vec_config"] = {
-            "backbone": "dilated_conv_v1",
+            "backend": "pypots_core",
+            "backbone": "pypots_ts2vec",
             "hidden_dim": int(self.hidden_dim),
+            "output_dim": int(self.output_dim),
             "encoder_layers": int(self.encoder_layers),
             "kernel_size": int(self.kernel_size),
             "pooling": "masked_mean",
             "input_features": int(self.input_feature_dim),
+            "encoder_input_features": int(self.encoder_input_feature_dim),
             "use_observation_mask": bool(self.use_observation_mask),
             "max_crop_len": None if self.max_crop_len is None else int(self.max_crop_len),
             "loss": "pypots_hierarchical_contrastive",
-            "loss_alpha": float(self.loss_alpha),
+            "loss_alpha": 0.5,
             "temporal_unit": int(self.temporal_unit),
             "mask_mode": self.mask_mode,
         }
@@ -188,139 +137,56 @@ class TS2Vec(DLWrapper):
     def set_metrics(self):
         return {}
 
-    @staticmethod
-    def _generate_continuous_mask(batch_size: int, time_steps: int, device: torch.device) -> Tensor:
-        mask = torch.ones(batch_size, time_steps, device=device, dtype=torch.bool)
-        n_segments = 5
-        segment_len = max(1, int(time_steps * 0.1))
-        for row in range(batch_size):
-            for _ in range(n_segments):
-                start = int(torch.randint(0, time_steps, (1,), device=device).item())
-                mask[row, start : min(start + segment_len, time_steps)] = False
-        return mask
-
-    def _encoder_mask(
-        self,
-        batch_size: int,
-        time_steps: int,
-        device: torch.device,
-        mask_mode: str | None,
-    ) -> Tensor | None:
-        if mask_mode is None or mask_mode == "all_true":
-            return None
-        if mask_mode == "binomial":
-            return torch.rand(batch_size, time_steps, device=device) >= 0.5
-        if mask_mode == "continuous":
-            return self._generate_continuous_mask(batch_size, time_steps, device)
-        if mask_mode == "all_false":
-            return torch.zeros(batch_size, time_steps, device=device, dtype=torch.bool)
-        if mask_mode == "mask_last":
-            mask = torch.ones(batch_size, time_steps, device=device, dtype=torch.bool)
-            mask[:, -1] = False
-            return mask
-        raise ValueError(f"Unsupported mask_mode: {mask_mode!r}")
-
-    def encode(self, x: Tensor, mask_mode: str | None = None) -> Tensor:
-        prepared = prepare_ts2vec_inputs(x, use_observation_mask=self.use_observation_mask)
-        time_mask = self._encoder_mask(prepared.shape[0], prepared.shape[1], prepared.device, mask_mode)
-        if time_mask is not None:
-            prepared = prepared.masked_fill(~time_mask.unsqueeze(-1), 0.0)
-        return self.encoder(prepared)
-
-    def _sample_crops(self, x: Tensor, mask: Tensor) -> tuple[Tensor, Tensor, int]:
-        valid_counts = mask.long().sum(dim=1)
+    def _window_for_pypots_core(self, x: Tensor, mask: Tensor | None) -> tuple[Tensor, Tensor, int]:
+        if mask is None:
+            time_mask = torch.ones(x.shape[:2], device=x.device, dtype=torch.bool)
+        else:
+            time_mask = _coerce_time_mask(mask, x)
+        valid_counts = time_mask.long().sum(dim=1)
         min_valid = int(valid_counts.min().item())
-        if min_valid <= 1:
-            crop_len = max(min_valid, 1)
-            return x[:, :crop_len], x[:, :crop_len], crop_len
+        if min_valid < 2:
+            window_len = max(min_valid, 1)
+            return x[:, :window_len], time_mask[:, :window_len], window_len
 
-        ts_len = min_valid if self.max_crop_len is None else min(min_valid, int(self.max_crop_len))
+        window_len = min_valid if self.max_crop_len is None else min(min_valid, int(self.max_crop_len))
         windowed: list[Tensor] = []
-        for sample, valid_len in zip(x, valid_counts.tolist()):
+        windowed_masks: list[Tensor] = []
+        for sample, sample_mask, valid_len in zip(x, time_mask, valid_counts.tolist()):
             valid_len = int(valid_len)
-            if valid_len <= ts_len:
+            if valid_len <= window_len:
                 offset = 0
             else:
-                offset = int(torch.randint(0, valid_len - ts_len + 1, (1,), device=x.device).item())
-            windowed.append(sample[offset : offset + ts_len])
-        x = torch.stack(windowed, dim=0)
+                offset = int(torch.randint(0, valid_len - window_len + 1, (1,), device=x.device).item())
+            windowed.append(sample[offset : offset + window_len])
+            windowed_masks.append(sample_mask[offset : offset + window_len])
+        return torch.stack(windowed, dim=0), torch.stack(windowed_masks, dim=0), window_len
 
-        min_crop_len = 2 ** (self.temporal_unit + 1)
-        if ts_len <= min_crop_len:
-            crop_len = ts_len
-        else:
-            crop_len = int(torch.randint(min_crop_len, ts_len + 1, (1,), device=x.device).item())
+    def _prepare_pypots_inputs(self, x: Tensor, mask: Tensor | None = None, *, crop_to_valid_window: bool = False) -> dict:
+        if crop_to_valid_window:
+            x, mask, _ = self._window_for_pypots_core(x, mask)
+        elif mask is not None:
+            mask = _coerce_time_mask(mask, x)
 
-        crop_left = int(torch.randint(0, ts_len - crop_len + 1, (1,), device=x.device).item())
-        crop_right = crop_left + crop_len
-        crop_eleft = int(torch.randint(0, crop_left + 1, (1,), device=x.device).item())
-        crop_eright = int(torch.randint(crop_right, ts_len + 1, (1,), device=x.device).item())
+        if mask is not None:
+            x = x.masked_fill(~mask.unsqueeze(-1), torch.nan)
+        prepared = prepare_ts2vec_inputs(x, use_observation_mask=self.use_observation_mask)
+        if mask is not None and not self.use_observation_mask:
+            prepared = prepared.masked_fill(~mask.unsqueeze(-1), torch.nan)
+        return {"X": prepared}
 
-        view_a: list[Tensor] = []
-        view_b: list[Tensor] = []
-        for sample in x:
-            crop_offset = int(
-                torch.randint(-crop_eleft, ts_len - crop_eright + 1, (1,), device=x.device).item()
-            )
-            view_a.append(sample[crop_offset + crop_eleft : crop_offset + crop_right])
-            view_b.append(sample[crop_offset + crop_left : crop_offset + crop_eright])
+    def _zero_loss(self) -> Tensor:
+        loss = next(self.parameters()).sum() * 0.0
+        for param in list(self.parameters())[1:]:
+            loss = loss + param.sum() * 0.0
+        return loss
 
-        return torch.stack(view_a, dim=0), torch.stack(view_b, dim=0), crop_len
-
-    @staticmethod
-    def _instance_contrastive_loss(z1: Tensor, z2: Tensor) -> Tensor:
-        batch_size = z1.size(0)
-        if batch_size == 1:
-            return z1.new_tensor(0.0)
-        z = torch.cat([z1, z2], dim=0).transpose(0, 1)
-        sim = torch.matmul(z, z.transpose(1, 2))
-        logits = torch.tril(sim, diagonal=-1)[:, :, :-1]
-        logits = logits + torch.triu(sim, diagonal=1)[:, :, 1:]
-        logits = -F.log_softmax(logits, dim=-1)
-
-        i = torch.arange(batch_size, device=z1.device)
-        return (logits[:, i, batch_size + i - 1].mean() + logits[:, batch_size + i, i].mean()) / 2
-
-    @staticmethod
-    def _temporal_contrastive_loss(z1: Tensor, z2: Tensor) -> Tensor:
-        time_steps = z1.size(1)
-        if time_steps == 1:
-            return z1.new_tensor(0.0)
-        z = torch.cat([z1, z2], dim=1)
-        sim = torch.matmul(z, z.transpose(1, 2))
-        logits = torch.tril(sim, diagonal=-1)[:, :, :-1]
-        logits = logits + torch.triu(sim, diagonal=1)[:, :, 1:]
-        logits = -F.log_softmax(logits, dim=-1)
-
-        t = torch.arange(time_steps, device=z1.device)
-        return (logits[:, t, time_steps + t - 1].mean() + logits[:, time_steps + t, t].mean()) / 2
-
-    def _hierarchical_contrastive_loss(self, z1: Tensor, z2: Tensor) -> Tensor:
-        """PyPOTS/official TS2Vec hierarchical contrastive objective."""
-
-        loss = z1.new_tensor(0.0)
-        level = 0
-        cur1, cur2 = z1, z2
-        while cur1.shape[1] > 1:
-            if self.loss_alpha != 0:
-                loss = loss + self.loss_alpha * self._instance_contrastive_loss(cur1, cur2)
-            if level >= self.temporal_unit and (1 - self.loss_alpha) != 0:
-                loss = loss + (1 - self.loss_alpha) * self._temporal_contrastive_loss(cur1, cur2)
-            level += 1
-            cur1 = F.max_pool1d(cur1.transpose(1, 2), kernel_size=2).transpose(1, 2)
-            cur2 = F.max_pool1d(cur2.transpose(1, 2), kernel_size=2).transpose(1, 2)
-        if cur1.shape[1] == 1:
-            if self.loss_alpha != 0:
-                loss = loss + self.loss_alpha * self._instance_contrastive_loss(cur1, cur2)
-            level += 1
-        return loss / max(level, 1)
-
-    def _contrastive_loss(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
-        time_mask = _coerce_time_mask(mask, x)
-        view_a, view_b, crop_len = self._sample_crops(x, time_mask)
-        z1 = self.encode(view_a, mask_mode=self.mask_mode)[:, -crop_len:]
-        z2 = self.encode(view_b, mask_mode=self.mask_mode)[:, :crop_len]
-        return self._hierarchical_contrastive_loss(z1, z2)
+    def encode(self, x: Tensor, mask_mode: str | None = None, mask: Tensor | None = None) -> Tensor:
+        prepared = self._prepare_pypots_inputs(x, mask)["X"]
+        effective_mask = "all_true" if mask_mode is None else mask_mode
+        try:
+            return self.encoder(prepared, mask=effective_mask)
+        except TypeError:
+            return self.encoder(prepared)
 
     def forward(self, x: Tensor) -> Tensor:
         return self.encode(x)
@@ -339,7 +205,12 @@ class TS2Vec(DLWrapper):
         x = x.float().to(self.device)
         if mask is not None:
             mask = mask.to(self.device).bool()
-        loss = self._contrastive_loss(x, mask)
+        inputs = self._prepare_pypots_inputs(x, mask, crop_to_valid_window=True)
+        if inputs["X"].shape[1] < 2:
+            loss = self._zero_loss()
+        else:
+            results = self.pypots_core(inputs, calc_criterion=True)
+            loss = results.get("loss", results.get("metric")).sum()
         self.log(f"{step_prefix}/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
         return loss
 
@@ -368,12 +239,12 @@ class TS2VecProbe(DLPredictionWrapper):
         in_features = input_size[2]
         encoder_in_features = in_features * 2 if use_observation_mask else in_features
         self.use_observation_mask = use_observation_mask
-        self.encoder = DilatedConvEncoder(
-            in_features=encoder_in_features,
-            hidden_dim=hidden_dim,
-            layers=encoder_layers,
-            dropout=dropout,
-            kernel_size=kernel_size,
+        self.encoder = TS2VecEncoder(
+            n_features=encoder_in_features,
+            n_pred_features=hidden_dim,
+            d_hidden=hidden_dim,
+            n_layers=encoder_layers,
+            mask_mode="binomial",
         )
         self.logit = nn.Linear(hidden_dim, num_classes)
         self.pretrained_encoder_path = pretrained_encoder_path
@@ -394,7 +265,11 @@ class TS2VecProbe(DLPredictionWrapper):
             return
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         state_dict = checkpoint.get("state_dict", checkpoint)
-        encoder_state = {k.replace("encoder.", "", 1): v for k, v in state_dict.items() if k.startswith("encoder.")}
+        encoder_state = {
+            k.replace("pypots_core.encoder.", "", 1): v
+            for k, v in state_dict.items()
+            if k.startswith("pypots_core.encoder.")
+        }
         if encoder_state:
             current_state = self.encoder.state_dict()
             compatible_state = {
@@ -427,7 +302,15 @@ class TS2VecProbe(DLPredictionWrapper):
         return targets, keep
 
     def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
-        encoded = self.encoder(prepare_ts2vec_inputs(x, use_observation_mask=self.use_observation_mask))
+        if mask is not None:
+            x = x.masked_fill(~mask.to(device=x.device, dtype=torch.bool).unsqueeze(-1), torch.nan)
+        prepared = prepare_ts2vec_inputs(x, use_observation_mask=self.use_observation_mask)
+        if mask is not None and not self.use_observation_mask:
+            prepared = prepared.masked_fill(~mask.to(device=x.device, dtype=torch.bool).unsqueeze(-1), torch.nan)
+        try:
+            encoded = self.encoder(prepared, mask="all_true")
+        except TypeError:
+            encoded = self.encoder(prepared)
         pooled = masked_mean_pool(encoded, mask)
         return self.logit(pooled)
 
