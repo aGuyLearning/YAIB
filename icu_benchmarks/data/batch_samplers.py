@@ -93,3 +93,56 @@ class HomogeneousSourceBatchSampler(Sampler[List[int]]):
         if self.shuffle:
             random.shuffle(batches)
         yield from batches
+
+
+class ReplacementBatchSampler(Sampler[List[int]]):
+    """Yield a fixed number of random batches sampled with replacement."""
+
+    def __init__(self, dataset, batch_size: int, *, num_batches: int) -> None:
+        if batch_size < 1:
+            raise ValueError("batch_size must be >= 1")
+        if num_batches < 1:
+            raise ValueError("num_batches must be >= 1")
+        if len(dataset) < 1:
+            raise ValueError("dataset must contain at least one item")
+        self.batch_size = batch_size
+        self.num_batches = num_batches
+        self._length = len(dataset)
+
+    def __len__(self) -> int:
+        return self.num_batches
+
+    def __iter__(self) -> Iterator[List[int]]:
+        for _ in range(self.num_batches):
+            yield [random.randrange(self._length) for _ in range(self.batch_size)]
+
+
+class HomogeneousSourceReplacementBatchSampler(Sampler[List[int]]):
+    """Yield replacement-sampled batches where each batch comes from one source bucket."""
+
+    def __init__(self, dataset, batch_size: int, *, num_batches: int) -> None:
+        if batch_size < 1:
+            raise ValueError("batch_size must be >= 1")
+        if num_batches < 1:
+            raise ValueError("num_batches must be >= 1")
+        self.batch_size = batch_size
+        self.num_batches = num_batches
+        group_col = dataset.vars["GROUP"]
+        stay_ids = dataset.grouping_df[group_col].unique().to_list()
+        by_source: dict[int, list[int]] = defaultdict(list)
+        for i, sid in enumerate(stay_ids):
+            by_source[pool_source_id_from_stay_id(int(sid))].append(i)
+        self._by_source = {k: v for k, v in by_source.items() if v}
+        if not self._by_source:
+            raise ValueError("dataset must contain at least one source bucket")
+        self._sources = sorted(self._by_source)
+        self._source_weights = [len(self._by_source[src]) for src in self._sources]
+
+    def __len__(self) -> int:
+        return self.num_batches
+
+    def __iter__(self) -> Iterator[List[int]]:
+        for _ in range(self.num_batches):
+            src = random.choices(self._sources, weights=self._source_weights, k=1)[0]
+            source_indices = self._by_source[src]
+            yield [random.choice(source_indices) for _ in range(self.batch_size)]

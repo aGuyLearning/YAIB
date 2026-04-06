@@ -16,13 +16,14 @@ Adam.lr = 3e-4
 Adam.weight_decay = 1e-5
 train_common.epochs = 100
 train_common.batch_size = 32
-# Optional iteration budget: pass e.g. -hp train_common.max_steps=5000
-# to stop before a full-corpus epoch on very large pretrain corpora.
+train_common.max_steps = 30000
+train_common.ts2vec_stochastic_batches = True
 train_common.patience = 8
 train_common.min_delta = 1e-4
 train_common.weight = ""
 train_common.train_only = True
-# Pooled corpora: set True for single-dataset-per-batch TS2Vec pretrain (Pretrain task only).
+# Pooled corpora: set True for single-source TS2Vec batches. With stochastic
+# batches enabled, source buckets are sampled proportionally to source size.
 train_common.homogeneous_dataset_batches = False
 
 # Keep the encoder small enough that it must learn from trajectories, not just

@@ -15,7 +15,11 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader
 
 from icu_benchmarks.constants import RunMode
-from icu_benchmarks.data.batch_samplers import HomogeneousSourceBatchSampler
+from icu_benchmarks.data.batch_samplers import (
+    HomogeneousSourceBatchSampler,
+    HomogeneousSourceReplacementBatchSampler,
+    ReplacementBatchSampler,
+)
 from icu_benchmarks.data.constants import DataSplit as DataSplit
 from icu_benchmarks.data.loader import (
     ImputationPandasDataset,
@@ -60,6 +64,10 @@ def _homogeneous_ts2vec_pretrain_batches(homogeneous_dataset_batches: bool, mode
     return mode == RunMode.pretrain and isinstance(model_cls, type) and issubclass(model_cls, TS2Vec)
 
 
+def _ts2vec_pretrain_model(mode: str, model_cls: object) -> bool:
+    return mode == RunMode.pretrain and isinstance(model_cls, type) and issubclass(model_cls, TS2Vec)
+
+
 def _feature_count(dataset) -> int:
     group_col = dataset.vars.get("GROUP")
     return len([col for col in dataset.features_df.columns if col != group_col])
@@ -95,6 +103,7 @@ def train_common(
     polars: bool = True,
     persistent_workers: bool = False,
     homogeneous_dataset_batches: bool = False,
+    ts2vec_stochastic_batches: bool = False,
 ):
     """Common wrapper to train all benchmarked models.
 
@@ -124,14 +133,27 @@ def train_common(
         num_workers: Number of workers to use for data loading.
         homogeneous_dataset_batches: If True, use per-source homogeneous batches for TS2Vec pretrain only;
             ignored for any other mode or model (a warning is logged when True but unsupported).
+        ts2vec_stochastic_batches: If True, use replacement-sampled TS2Vec pretrain batches for max_steps steps.
     """
     if dataset_names is None:
         dataset_names = {}
 
+    is_ts2vec_pretrain = _ts2vec_pretrain_model(mode, model)
     use_homogeneous_batches = _homogeneous_ts2vec_pretrain_batches(homogeneous_dataset_batches, mode, model)
     if homogeneous_dataset_batches and not use_homogeneous_batches:
         logging.warning(
             "train_common.homogeneous_dataset_batches=True is only supported for RunMode.pretrain with TS2Vec; "
+            "using standard batching."
+        )
+    use_stochastic_batches = bool(ts2vec_stochastic_batches and is_ts2vec_pretrain and max_steps > 0)
+    if ts2vec_stochastic_batches and not is_ts2vec_pretrain:
+        logging.warning(
+            "train_common.ts2vec_stochastic_batches=True is only supported for RunMode.pretrain with TS2Vec; "
+            "using standard batching."
+        )
+    elif ts2vec_stochastic_batches and max_steps <= 0:
+        logging.warning(
+            "train_common.ts2vec_stochastic_batches=True requires train_common.max_steps > 0; "
             "using standard batching."
         )
 
@@ -164,14 +186,59 @@ def train_common(
     logging.info(f"pin_memory={pin_memory}, persistent_workers={persistent_workers}.")
     if mode == RunMode.pretrain:
         logging.info(
-            "Pretrain sequence stats: train maxlen=%d, val maxlen=%d, features=%d, batch_size=%d, max_steps=%d.",
+            "Pretrain sequence stats: train maxlen=%d, val maxlen=%d, features=%d, batch_size=%d, "
+            "max_steps=%d, ts2vec_stochastic_batches=%s.",
             train_dataset.maxlen,
             val_dataset.maxlen,
             _feature_count(train_dataset),
             batch_size,
             max_steps,
+            use_stochastic_batches,
         )
-    if use_homogeneous_batches and model.requires_backprop:
+    if use_stochastic_batches and model.requires_backprop:
+        if use_homogeneous_batches:
+            logging.info("Using stochastic homogeneous-source replacement batching (TS2Vec pretrain).")
+            train_sampler = HomogeneousSourceReplacementBatchSampler(
+                train_dataset,
+                batch_size,
+                num_batches=max_steps,
+            )
+            val_sampler = HomogeneousSourceBatchSampler(
+                val_dataset, batch_size, drop_last=True, shuffle=False
+            )
+            train_loader = DataLoader(
+                train_dataset,
+                batch_sampler=train_sampler,
+                num_workers=num_workers,
+                pin_memory=pin_memory,
+                persistent_workers=persistent_workers,
+            )
+            val_loader = DataLoader(
+                val_dataset,
+                batch_sampler=val_sampler,
+                num_workers=num_workers,
+                pin_memory=pin_memory,
+                persistent_workers=persistent_workers,
+            )
+        else:
+            logging.info("Using stochastic replacement batching (TS2Vec pretrain).")
+            train_loader = DataLoader(
+                train_dataset,
+                batch_sampler=ReplacementBatchSampler(train_dataset, batch_size, num_batches=max_steps),
+                num_workers=num_workers,
+                pin_memory=pin_memory,
+                persistent_workers=persistent_workers,
+            )
+            val_loader = DataLoader(
+                val_dataset,
+                batch_size=batch_size,
+                shuffle=False,
+                num_workers=num_workers,
+                pin_memory=pin_memory,
+                drop_last=True,
+                persistent_workers=persistent_workers,
+            )
+    elif use_homogeneous_batches and model.requires_backprop:
         logging.info("Using homogeneous-dataset batching (TS2Vec pretrain).")
         train_loader = DataLoader(
             train_dataset,
@@ -213,7 +280,7 @@ def train_common(
 
     first_batch = next(iter(train_loader))
     data_shape = _infer_input_shape_from_batch(first_batch)
-    logging.info("First train batch input shape: %s; train batches per epoch: %d.", tuple(data_shape), len(train_loader))
+    logging.info("First train batch input shape: %s; train loader batches: %d.", tuple(data_shape), len(train_loader))
 
     if load_weights:
         model: DLModel | MLModelClassifier | MLModelRegression = load_model(
