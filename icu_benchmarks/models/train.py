@@ -104,6 +104,7 @@ def train_common(
     persistent_workers: bool = False,
     homogeneous_dataset_batches: bool = False,
     ts2vec_stochastic_batches: bool = False,
+    ts2vec_val_check_interval_steps: int = 5000,
 ):
     """Common wrapper to train all benchmarked models.
 
@@ -134,6 +135,7 @@ def train_common(
         homogeneous_dataset_batches: If True, use per-source homogeneous batches for TS2Vec pretrain only;
             ignored for any other mode or model (a warning is logged when True but unsupported).
         ts2vec_stochastic_batches: If True, use replacement-sampled TS2Vec pretrain batches for max_steps steps.
+        ts2vec_val_check_interval_steps: Validation interval in optimizer steps for stochastic TS2Vec pretraining.
     """
     if dataset_names is None:
         dataset_names = {}
@@ -302,14 +304,28 @@ def train_common(
         devices = 1
 
     callbacks = [
-        EarlyStopping(monitor="val/loss", min_delta=min_delta, patience=patience, strict=False, verbose=verbose),
-        ModelCheckpoint(log_dir, filename="model", save_top_k=1, save_last=True),
+        ModelCheckpoint(log_dir, filename="model", monitor="val/loss", mode="min", save_top_k=1, save_last=True),
         LearningRateMonitor(logging_interval="step"),
     ]
+    if use_stochastic_batches:
+        logging.info("TS2Vec stochastic pretrain uses fixed-budget training with best-val checkpoint selection.")
+    else:
+        callbacks.insert(
+            0,
+            EarlyStopping(monitor="val/loss", min_delta=min_delta, patience=patience, strict=False, verbose=verbose),
+        )
     if verbose:
         callbacks.append(TQDMProgressBar(refresh_rate=min(100, len(train_loader) // 2)))
     if precision == 16 or "16-mixed":
         torch.set_float32_matmul_precision("medium")
+    val_check_interval = None
+    if use_stochastic_batches and ts2vec_val_check_interval_steps > 0:
+        val_check_interval = min(ts2vec_val_check_interval_steps, max_steps)
+        logging.info("Validating stochastic TS2Vec pretrain every %d training steps.", val_check_interval)
+
+    trainer_kwargs = {}
+    if val_check_interval is not None:
+        trainer_kwargs["val_check_interval"] = val_check_interval
 
     trainer = Trainer(
         max_epochs=epochs if model.requires_backprop else 1,
@@ -325,6 +341,7 @@ def train_common(
         logger=loggers,
         num_sanity_val_steps=2,  # Helps catch errors in the validation loop before training begins.
         log_every_n_steps=5,
+        **trainer_kwargs,
     )
     if not eval_only:
         if model.requires_backprop:
