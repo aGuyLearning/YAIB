@@ -60,6 +60,11 @@ def _homogeneous_ts2vec_pretrain_batches(homogeneous_dataset_batches: bool, mode
     return mode == RunMode.pretrain and isinstance(model_cls, type) and issubclass(model_cls, TS2Vec)
 
 
+def _feature_count(dataset) -> int:
+    group_col = dataset.vars.get("GROUP")
+    return len([col for col in dataset.features_df.columns if col != group_col])
+
+
 @gin.configurable("train_common")
 def train_common(
     data: dict[str, dict[str, pl.DataFrame]],
@@ -75,6 +80,7 @@ def train_common(
     precision: Optional[Literal[16] | Literal[32] | Literal[64] | Literal["16-true"]] = 32,
     batch_size: int = 1,
     epochs: int = 100,
+    max_steps: int = -1,
     patience: int = 20,
     min_delta: float = 1e-5,
     test_on: str = DataSplit.test,
@@ -106,6 +112,7 @@ def train_common(
         precision: Pytorch precision to be used for training. Can be 16 or 32.
         batch_size: Batch size to be used for training.
         epochs: Number of epochs to train for.
+        max_steps: Optional optimizer-step cap. If > 0, Lightning stops training after this many steps.
         patience: Number of epochs to wait for improvement before early stopping.
         min_delta: Minimum change in loss to be considered an improvement.
         test_on: If set to "test", evaluate the model on the test set. If set to "val", evaluate on the validation set.
@@ -145,6 +152,8 @@ def train_common(
     val_dataset = dataset_class(data, split=DataSplit.val, ram_cache=ram_cache, name=dataset_names["val"])
     train_dataset, val_dataset = assure_minimum_length(train_dataset), assure_minimum_length(val_dataset)
     batch_size = min(batch_size, len(train_dataset), len(val_dataset))
+    persistent_workers = persistent_workers and num_workers > 0
+    pin_memory = not cpu and torch.cuda.is_available()
 
     if not eval_only:
         logging.info(
@@ -152,6 +161,16 @@ def train_common(
             f" {len(val_dataset)} samples."
         )
     logging.info(f"Using {num_workers} workers for data loading.")
+    logging.info(f"pin_memory={pin_memory}, persistent_workers={persistent_workers}.")
+    if mode == RunMode.pretrain:
+        logging.info(
+            "Pretrain sequence stats: train maxlen=%d, val maxlen=%d, features=%d, batch_size=%d, max_steps=%d.",
+            train_dataset.maxlen,
+            val_dataset.maxlen,
+            _feature_count(train_dataset),
+            batch_size,
+            max_steps,
+        )
     if use_homogeneous_batches and model.requires_backprop:
         logging.info("Using homogeneous-dataset batching (TS2Vec pretrain).")
         train_loader = DataLoader(
@@ -160,6 +179,7 @@ def train_common(
                 train_dataset, batch_size, drop_last=True, shuffle=True
             ),
             num_workers=num_workers,
+            pin_memory=pin_memory,
             persistent_workers=persistent_workers,
         )
         val_loader = DataLoader(
@@ -168,6 +188,7 @@ def train_common(
                 val_dataset, batch_size, drop_last=True, shuffle=False
             ),
             num_workers=num_workers,
+            pin_memory=pin_memory,
             persistent_workers=persistent_workers,
         )
     else:
@@ -176,6 +197,7 @@ def train_common(
             batch_size=batch_size,
             shuffle=True,
             num_workers=num_workers,
+            pin_memory=pin_memory,
             drop_last=True,
             persistent_workers=persistent_workers,
         )
@@ -184,12 +206,14 @@ def train_common(
             batch_size=batch_size,
             shuffle=False,
             num_workers=num_workers,
+            pin_memory=pin_memory,
             drop_last=True,
             persistent_workers=persistent_workers,
         )
 
     first_batch = next(iter(train_loader))
     data_shape = _infer_input_shape_from_batch(first_batch)
+    logging.info("First train batch input shape: %s; train batches per epoch: %d.", tuple(data_shape), len(train_loader))
 
     if load_weights:
         model: DLModel | MLModelClassifier | MLModelRegression = load_model(
@@ -222,6 +246,7 @@ def train_common(
 
     trainer = Trainer(
         max_epochs=epochs if model.requires_backprop else 1,
+        max_steps=max_steps if model.requires_backprop and max_steps > 0 else -1,
         min_epochs=1,  # We need at least one epoch to get results.
         callbacks=callbacks,
         precision=precision,

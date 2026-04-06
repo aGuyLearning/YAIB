@@ -14,8 +14,10 @@ train_common.model = @TS2Vec
 train_common.optimizer = @Adam
 Adam.lr = 3e-4
 Adam.weight_decay = 1e-5
-train_common.epochs = 120
-train_common.batch_size = 128
+train_common.epochs = 100
+train_common.batch_size = 32
+# Optional iteration budget: pass e.g. -hp train_common.max_steps=5000
+# to stop before a full-corpus epoch on very large pretrain corpora.
 train_common.patience = 8
 train_common.min_delta = 1e-4
 train_common.weight = ""
@@ -26,8 +28,11 @@ train_common.homogeneous_dataset_batches = False
 # Keep the encoder small enough that it must learn from trajectories, not just
 # memorize engineered summary channels.
 TS2Vec.hidden_dim = 128
-TS2Vec.projection_dim = 128
 TS2Vec.encoder_layers = 4
 TS2Vec.dropout = 0.1
-TS2Vec.aug_noise_std = 0.05
-TS2Vec.temperature = 0.07
+TS2Vec.mask_mode = "binomial"
+# PyPOTS/official TS2Vec-style hierarchical contrastive loss.
+TS2Vec.loss_alpha = 0.5
+TS2Vec.temporal_unit = 0
+# For very long corpora, pass e.g. -hp TS2Vec.max_crop_len=128 to bound
+# per-step convolution and contrastive-loss cost without changing the raw data.

@@ -126,29 +126,38 @@ class TS2Vec(DLWrapper):
         self,
         input_size,
         hidden_dim: int = 128,
-        projection_dim: int = 128,
         encoder_layers: int = 4,
         dropout: float = 0.1,
-        aug_noise_std: float = 0.05,
-        temperature: float = 0.07,
         kernel_size: int = 3,
-        min_crop_ratio: float = 0.5,
+        max_crop_len: int | None = None,
+        loss_alpha: float = 0.5,
+        temporal_unit: int = 0,
+        mask_mode: str = "binomial",
         use_observation_mask: bool = True,
         *args,
         **kwargs,
     ):
         super().__init__(*args, input_size=input_size, **kwargs)
+        if max_crop_len is not None and max_crop_len < 2:
+            raise ValueError("max_crop_len must be >= 2 when set")
+        if not 0 <= loss_alpha <= 1:
+            raise ValueError("loss_alpha must be between 0 and 1")
+        if temporal_unit < 0:
+            raise ValueError("temporal_unit must be >= 0")
+        valid_mask_modes = {"binomial", "continuous", "all_true", "all_false", "mask_last"}
+        if mask_mode not in valid_mask_modes:
+            raise ValueError(f"mask_mode must be one of {sorted(valid_mask_modes)}, got {mask_mode!r}")
         in_features = input_size[2]
         encoder_in_features = in_features * 2 if use_observation_mask else in_features
         self.input_feature_dim = in_features
         self.hidden_dim = hidden_dim
-        self.projection_dim = projection_dim
         self.encoder_layers = encoder_layers
         self.dropout = dropout
         self.kernel_size = kernel_size
-        self.aug_noise_std = aug_noise_std
-        self.temperature = temperature
-        self.min_crop_ratio = min_crop_ratio
+        self.max_crop_len = max_crop_len
+        self.loss_alpha = loss_alpha
+        self.temporal_unit = temporal_unit
+        self.mask_mode = mask_mode
         self.use_observation_mask = use_observation_mask
 
         self.encoder = DilatedConvEncoder(
@@ -158,89 +167,159 @@ class TS2Vec(DLWrapper):
             dropout=dropout,
             kernel_size=kernel_size,
         )
-        self.projector = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, projection_dim),
-        )
 
     def on_save_checkpoint(self, checkpoint):
         checkpoint["ts2vec_config"] = {
             "backbone": "dilated_conv_v1",
             "hidden_dim": int(self.hidden_dim),
-            "projection_dim": int(self.projection_dim),
             "encoder_layers": int(self.encoder_layers),
             "kernel_size": int(self.kernel_size),
             "pooling": "masked_mean",
             "input_features": int(self.input_feature_dim),
             "use_observation_mask": bool(self.use_observation_mask),
+            "max_crop_len": None if self.max_crop_len is None else int(self.max_crop_len),
+            "loss": "pypots_hierarchical_contrastive",
+            "loss_alpha": float(self.loss_alpha),
+            "temporal_unit": int(self.temporal_unit),
+            "mask_mode": self.mask_mode,
         }
         return super().on_save_checkpoint(checkpoint)
 
     def set_metrics(self):
         return {}
 
-    def encode(self, x: Tensor) -> Tensor:
-        return self.encoder(prepare_ts2vec_inputs(x, use_observation_mask=self.use_observation_mask))
+    @staticmethod
+    def _generate_continuous_mask(batch_size: int, time_steps: int, device: torch.device) -> Tensor:
+        mask = torch.ones(batch_size, time_steps, device=device, dtype=torch.bool)
+        n_segments = 5
+        segment_len = max(1, int(time_steps * 0.1))
+        for row in range(batch_size):
+            for _ in range(n_segments):
+                start = int(torch.randint(0, time_steps, (1,), device=device).item())
+                mask[row, start : min(start + segment_len, time_steps)] = False
+        return mask
 
-    def _augment(self, x: Tensor) -> Tensor:
-        if self.aug_noise_std <= 0:
-            return x
-        noise = torch.randn_like(x) * self.aug_noise_std
-        return torch.where(torch.isfinite(x), x + noise, x)
+    def _encoder_mask(
+        self,
+        batch_size: int,
+        time_steps: int,
+        device: torch.device,
+        mask_mode: str | None,
+    ) -> Tensor | None:
+        if mask_mode is None or mask_mode == "all_true":
+            return None
+        if mask_mode == "binomial":
+            return torch.rand(batch_size, time_steps, device=device) >= 0.5
+        if mask_mode == "continuous":
+            return self._generate_continuous_mask(batch_size, time_steps, device)
+        if mask_mode == "all_false":
+            return torch.zeros(batch_size, time_steps, device=device, dtype=torch.bool)
+        if mask_mode == "mask_last":
+            mask = torch.ones(batch_size, time_steps, device=device, dtype=torch.bool)
+            mask[:, -1] = False
+            return mask
+        raise ValueError(f"Unsupported mask_mode: {mask_mode!r}")
 
-    def _sample_crops(self, x: Tensor, mask: Tensor) -> tuple[Tensor, Tensor]:
+    def encode(self, x: Tensor, mask_mode: str | None = None) -> Tensor:
+        prepared = prepare_ts2vec_inputs(x, use_observation_mask=self.use_observation_mask)
+        time_mask = self._encoder_mask(prepared.shape[0], prepared.shape[1], prepared.device, mask_mode)
+        if time_mask is not None:
+            prepared = prepared.masked_fill(~time_mask.unsqueeze(-1), 0.0)
+        return self.encoder(prepared)
+
+    def _sample_crops(self, x: Tensor, mask: Tensor) -> tuple[Tensor, Tensor, int]:
         valid_counts = mask.long().sum(dim=1)
         min_valid = int(valid_counts.min().item())
-        if min_valid <= 2:
-            return x, x
+        if min_valid <= 1:
+            crop_len = max(min_valid, 1)
+            return x[:, :crop_len], x[:, :crop_len], crop_len
 
-        min_crop_len = max(2, int(min_valid * self.min_crop_ratio))
-        crop_len = int(torch.randint(min_crop_len, min_valid + 1, (1,), device=x.device).item())
+        ts_len = min_valid if self.max_crop_len is None else min(min_valid, int(self.max_crop_len))
+        windowed: list[Tensor] = []
+        for sample, valid_len in zip(x, valid_counts.tolist()):
+            valid_len = int(valid_len)
+            if valid_len <= ts_len:
+                offset = 0
+            else:
+                offset = int(torch.randint(0, valid_len - ts_len + 1, (1,), device=x.device).item())
+            windowed.append(sample[offset : offset + ts_len])
+        x = torch.stack(windowed, dim=0)
+
+        min_crop_len = 2 ** (self.temporal_unit + 1)
+        if ts_len <= min_crop_len:
+            crop_len = ts_len
+        else:
+            crop_len = int(torch.randint(min_crop_len, ts_len + 1, (1,), device=x.device).item())
+
+        crop_left = int(torch.randint(0, ts_len - crop_len + 1, (1,), device=x.device).item())
+        crop_right = crop_left + crop_len
+        crop_eleft = int(torch.randint(0, crop_left + 1, (1,), device=x.device).item())
+        crop_eright = int(torch.randint(crop_right, ts_len + 1, (1,), device=x.device).item())
 
         view_a: list[Tensor] = []
         view_b: list[Tensor] = []
-        for sample, valid_len in zip(x, valid_counts.tolist()):
-            valid_len = int(valid_len)
-            if valid_len <= crop_len:
-                left_a = 0
-                left_b = 0
-            else:
-                left_a = int(torch.randint(0, valid_len - crop_len + 1, (1,), device=x.device).item())
-                left_b = int(torch.randint(0, valid_len - crop_len + 1, (1,), device=x.device).item())
-            view_a.append(sample[left_a : left_a + crop_len])
-            view_b.append(sample[left_b : left_b + crop_len])
+        for sample in x:
+            crop_offset = int(
+                torch.randint(-crop_eleft, ts_len - crop_eright + 1, (1,), device=x.device).item()
+            )
+            view_a.append(sample[crop_offset + crop_eleft : crop_offset + crop_right])
+            view_b.append(sample[crop_offset + crop_left : crop_offset + crop_eright])
 
-        return torch.stack(view_a, dim=0), torch.stack(view_b, dim=0)
+        return torch.stack(view_a, dim=0), torch.stack(view_b, dim=0), crop_len
 
-    def _timestamp_contrastive_loss(self, z1: Tensor, z2: Tensor) -> Tensor:
-        # Contrast across the batch independently for each timestamp.
-        p1 = F.normalize(self.projector(z1), dim=-1)
-        p2 = F.normalize(self.projector(z2), dim=-1)
-        logits = torch.einsum("btd,ctd->tbc", p1, p2) / self.temperature
-        labels = torch.arange(logits.shape[1], device=logits.device).expand(logits.shape[0], -1)
-        loss_a = F.cross_entropy(logits.reshape(-1, logits.shape[-1]), labels.reshape(-1))
-        loss_b = F.cross_entropy(logits.transpose(1, 2).reshape(-1, logits.shape[-1]), labels.reshape(-1))
-        return 0.5 * (loss_a + loss_b)
+    @staticmethod
+    def _instance_contrastive_loss(z1: Tensor, z2: Tensor) -> Tensor:
+        batch_size = z1.size(0)
+        if batch_size == 1:
+            return z1.new_tensor(0.0)
+        z = torch.cat([z1, z2], dim=0).transpose(0, 1)
+        sim = torch.matmul(z, z.transpose(1, 2))
+        logits = torch.tril(sim, diagonal=-1)[:, :, :-1]
+        logits = logits + torch.triu(sim, diagonal=1)[:, :, 1:]
+        logits = -F.log_softmax(logits, dim=-1)
+
+        i = torch.arange(batch_size, device=z1.device)
+        return (logits[:, i, batch_size + i - 1].mean() + logits[:, batch_size + i, i].mean()) / 2
+
+    @staticmethod
+    def _temporal_contrastive_loss(z1: Tensor, z2: Tensor) -> Tensor:
+        time_steps = z1.size(1)
+        if time_steps == 1:
+            return z1.new_tensor(0.0)
+        z = torch.cat([z1, z2], dim=1)
+        sim = torch.matmul(z, z.transpose(1, 2))
+        logits = torch.tril(sim, diagonal=-1)[:, :, :-1]
+        logits = logits + torch.triu(sim, diagonal=1)[:, :, 1:]
+        logits = -F.log_softmax(logits, dim=-1)
+
+        t = torch.arange(time_steps, device=z1.device)
+        return (logits[:, t, time_steps + t - 1].mean() + logits[:, time_steps + t, t].mean()) / 2
 
     def _hierarchical_contrastive_loss(self, z1: Tensor, z2: Tensor) -> Tensor:
-        total = z1.new_tensor(0.0)
-        levels = 0
+        """PyPOTS/official TS2Vec hierarchical contrastive objective."""
+
+        loss = z1.new_tensor(0.0)
+        level = 0
         cur1, cur2 = z1, z2
         while cur1.shape[1] > 1:
-            total = total + self._timestamp_contrastive_loss(cur1, cur2)
-            levels += 1
-            cur1 = F.max_pool1d(cur1.transpose(1, 2), kernel_size=2, stride=2).transpose(1, 2)
-            cur2 = F.max_pool1d(cur2.transpose(1, 2), kernel_size=2, stride=2).transpose(1, 2)
-        total = total + self._timestamp_contrastive_loss(cur1, cur2)
-        levels += 1
-        return total / max(levels, 1)
+            if self.loss_alpha != 0:
+                loss = loss + self.loss_alpha * self._instance_contrastive_loss(cur1, cur2)
+            if level >= self.temporal_unit and (1 - self.loss_alpha) != 0:
+                loss = loss + (1 - self.loss_alpha) * self._temporal_contrastive_loss(cur1, cur2)
+            level += 1
+            cur1 = F.max_pool1d(cur1.transpose(1, 2), kernel_size=2).transpose(1, 2)
+            cur2 = F.max_pool1d(cur2.transpose(1, 2), kernel_size=2).transpose(1, 2)
+        if cur1.shape[1] == 1:
+            if self.loss_alpha != 0:
+                loss = loss + self.loss_alpha * self._instance_contrastive_loss(cur1, cur2)
+            level += 1
+        return loss / max(level, 1)
 
     def _contrastive_loss(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
         time_mask = _coerce_time_mask(mask, x)
-        view_a, view_b = self._sample_crops(self._augment(x), time_mask)
-        z1 = self.encode(view_a)
-        z2 = self.encode(view_b)
+        view_a, view_b, crop_len = self._sample_crops(x, time_mask)
+        z1 = self.encode(view_a, mask_mode=self.mask_mode)[:, -crop_len:]
+        z2 = self.encode(view_b, mask_mode=self.mask_mode)[:, :crop_len]
         return self._hierarchical_contrastive_loss(z1, z2)
 
     def forward(self, x: Tensor) -> Tensor:
